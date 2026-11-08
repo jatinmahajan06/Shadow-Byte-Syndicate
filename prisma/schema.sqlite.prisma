@@ -1,0 +1,240 @@
+// Shadow Byte Syndicate - Local SQLite Schema
+// Mirror of schema.prisma for zero-dependency local execution and offline development
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         String    @default("STUDENT") // "SUPER_ADMIN" | "COORDINATOR" | "STUDENT"
+  isActive     Boolean   @default(true)
+  studentId    String?
+  department   String?
+  phone        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sessions       Session[]
+  passwordResets PasswordResetToken[]
+  registrations  EventRegistration[]
+
+  createdEvents  Event[]             @relation("EventCreator")
+  updatedEvents  Event[]             @relation("EventUpdater")
+
+  createdPosts   Post[]              @relation("PostCreator")
+  updatedPosts   Post[]              @relation("PostUpdater")
+
+  auditLogs      AuditLog[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([token])
+}
+
+model Event {
+  id                   String        @id @default(cuid())
+  slug                 String        @unique
+  title                String
+  summary              String
+  description          String
+  bannerUrl            String?
+  mode                 String        @default("IN_PERSON") // "IN_PERSON" | "VIRTUAL" | "HYBRID"
+  venue                String
+  locationUrl          String?
+  startDate            DateTime
+  endDate              DateTime
+  registrationDeadline DateTime
+  capacity             Int
+  status               String        @default("DRAFT") // "DRAFT" | "PUBLISHED" | "ARCHIVED" | "CANCELLED"
+  isRegistrationOpen   Boolean       @default(true)
+  category             String        @default("Workshop")
+
+  createdById          String
+  createdBy            User          @relation("EventCreator", fields: [createdById], references: [id])
+  updatedById          String?
+  updatedBy            User?         @relation("EventUpdater", fields: [updatedById], references: [id])
+
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  registrations        EventRegistration[]
+
+  @@index([slug])
+  @@index([status])
+  @@index([startDate])
+}
+
+model EventRegistration {
+  id           String   @id @default(cuid())
+  eventId      String
+  event        Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  studentId    String
+  student      User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  status       String   @default("CONFIRMED") // "CONFIRMED" | "CANCELLED" | "ATTENDED"
+  notes        String?
+  registeredAt DateTime @default(now())
+
+  @@unique([eventId, studentId])
+  @@index([studentId])
+  @@index([eventId])
+}
+
+model Post {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  title       String
+  excerpt     String
+  content     String
+  coverImage  String?
+  category    String    @default("Security Research")
+  tags        String?
+  status      String    @default("DRAFT") // "DRAFT" | "PUBLISHED" | "ARCHIVED"
+  publishedAt DateTime?
+
+  createdById String
+  createdBy   User      @relation("PostCreator", fields: [createdById], references: [id])
+  updatedById String?
+  updatedBy   User?     @relation("PostUpdater", fields: [updatedById], references: [id])
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([slug])
+  @@index([status])
+}
+
+model TeamMember {
+  id           String   @id @default(cuid())
+  name         String
+  role         String
+  category     String   @default("CORE_TEAM") // "FACULTY" | "CORE_TEAM" | "LEAD" | "ADVISOR"
+  bio          String
+  photoUrl     String?
+  email        String?
+  githubUrl    String?
+  linkedinUrl  String?
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([category])
+  @@index([displayOrder])
+}
+
+model Resource {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  category    String
+  url         String
+  difficulty  String   @default("Beginner")
+  isPublished Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category])
+}
+
+model GalleryItem {
+  id           String   @id @default(cuid())
+  title        String
+  caption      String?
+  imageUrl     String
+  eventTag     String?
+  displayOrder Int      @default(0)
+  createdAt    DateTime @default(now())
+}
+
+model ContactMessage {
+  id          String    @id @default(cuid())
+  name        String
+  email       String
+  subject     String
+  message     String
+  isRead      Boolean   @default(false)
+  respondedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([isRead])
+}
+
+model SiteSettings {
+  id              String   @id @default("default")
+  clubName        String   @default("SHADOW BYTE SYNDICATE")
+  supportingLine  String   @default("HACK • RESEARCH • INNOVATE • SECURE")
+  mainTagline     String   @default("WE DON’T FOLLOW THE SYSTEM, WE SECURE IT.")
+  secondaryPhrase String   @default("BEYOND FIREWALLS.")
+  contactEmail    String   @default("contact@shadowbyte.club")
+  timezone        String   @default("Asia/Kolkata")
+  instagramHandle String   @default("@shadowbyte.syndicate")
+  youtubeChannel  String   @default("Shadow Byte Syndicate")
+  discordInvite   String   @default("discord.gg/shadowbyte")
+  bannerUrl       String   @default("/assets/brand/banner.jpeg")
+  shieldLogoUrl   String   @default("/assets/brand/shield-emblem.png")
+  aboutSummary    String   @default("Shadow Byte Syndicate is an elite collegiate cybersecurity research and defense club.")
+  ethicsStatement String   @default("We strictly adhere to ethical hacking, responsible disclosure, and defensive security research.")
+  updatedAt       DateTime @updatedAt
+}
+
+model PageSection {
+  id          String   @id @default(cuid())
+  page        String
+  sectionKey  String
+  title       String
+  subtitle    String?
+  contentJson String
+  updatedAt   DateTime @updatedAt
+
+  @@unique([page, sectionKey])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String
+  entityId   String?
+  details    String?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([action])
+  @@index([userId])
+  @@index([createdAt])
+}
