@@ -39,12 +39,13 @@ export const BRAND = {
     ">> ACCESS GRANTED: WELCOME TO SHADOW BYTE SYNDICATE.",
   ],
   socials: {
-    instagram: "@shadowbyte.syndicate",
-    youtube: "Shadow Byte Syndicate",
-    discord: "discord.gg/shadowbyte",
+    instagram: "",
+    youtube: "",
+    discord: "",
   },
   assets: {
     banner: "/assets/brand/banner.jpeg",
     shield: "/assets/brand/shield-emblem.png",
   },
 };
+

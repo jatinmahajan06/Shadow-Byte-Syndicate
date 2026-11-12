@@ -1,8 +1,9 @@
 import React from "react";
 import Link from "next/link";
-import { prisma } from "@/lib/prisma";
-import { PUBLISH_STATUS } from "@/lib/constants";
+import { getPublishedEvents } from "@/services/eventService";
 import { Calendar, MapPin, Users, Search, Clock, ArrowRight, Shield } from "lucide-react";
+
+export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "Events & Workshops",
@@ -14,44 +15,11 @@ export default async function EventsPage({
 }: {
   searchParams: { filter?: string; search?: string; mode?: string };
 }) {
-  const filter = searchParams.filter || "upcoming";
+  const filter = searchParams.filter === "past" ? "past" : "upcoming";
   const search = searchParams.search || "";
   const mode = searchParams.mode || "ALL";
 
-  const now = new Date();
-
-  const where: any = {
-    status: PUBLISH_STATUS.PUBLISHED,
-  };
-
-  if (filter === "past") {
-    where.startDate = { lt: now };
-  } else {
-    where.startDate = { gte: now };
-  }
-
-  if (mode !== "ALL") {
-    where.mode = mode;
-  }
-
-  if (search) {
-    where.OR = [
-      { title: { contains: search } },
-      { summary: { contains: search } },
-      { description: { contains: search } },
-      { venue: { contains: search } },
-    ];
-  }
-
-  const events = await prisma.event.findMany({
-    where,
-    orderBy: filter === "past" ? { startDate: "desc" } : { startDate: "asc" },
-    include: {
-      _count: {
-        select: { registrations: { where: { status: "CONFIRMED" } } },
-      },
-    },
-  });
+  const events = await getPublishedEvents({ filter, search, mode });
 
   return (
     <div className="py-12 lg:py-16">
@@ -75,8 +43,8 @@ export default async function EventsPage({
           {/* Upcoming / Past Tabs */}
           <div className="flex items-center space-x-2 w-full md:w-auto">
             <Link
-              href={`/events?filter=upcoming${search ? `&search=${search}` : ""}${
-                mode !== "ALL" ? `&mode=${mode}` : ""
+              href={`/events?filter=upcoming${search ? `&search=${encodeURIComponent(search)}` : ""}${
+                mode !== "ALL" ? `&mode=${encodeURIComponent(mode)}` : ""
               }`}
               className={`px-4 py-2 rounded text-xs font-mono font-semibold transition-all ${
                 filter === "upcoming"
@@ -87,8 +55,8 @@ export default async function EventsPage({
               UPCOMING EVENTS
             </Link>
             <Link
-              href={`/events?filter=past${search ? `&search=${search}` : ""}${
-                mode !== "ALL" ? `&mode=${mode}` : ""
+              href={`/events?filter=past${search ? `&search=${encodeURIComponent(search)}` : ""}${
+                mode !== "ALL" ? `&mode=${encodeURIComponent(mode)}` : ""
               }`}
               className={`px-4 py-2 rounded text-xs font-mono font-semibold transition-all ${
                 filter === "past"
@@ -126,12 +94,30 @@ export default async function EventsPage({
         {events.length === 0 ? (
           <div className="p-16 text-center cyber-panel rounded-lg border border-brand-border space-y-3">
             <Calendar className="w-12 h-12 text-brand-gray-dim mx-auto" />
-            <h3 className="text-base font-bold text-white">No Events Found</h3>
+            <h3 className="text-base font-bold text-white font-mono">
+              {search || mode !== "ALL"
+                ? "No Matching Events Found"
+                : filter === "past"
+                ? "No past archived events yet."
+                : "No upcoming events yet."}
+            </h3>
             <p className="text-xs text-brand-gray-muted max-w-sm mx-auto">
-              {filter === "past"
-                ? "No past archived events match your search criteria."
-                : "No upcoming sessions are currently posted. Check back soon for new announcements."}
+              {search || mode !== "ALL"
+                ? "No published events match your current search or filter criteria."
+                : filter === "past"
+                ? "Completed events will appear here after they conclude."
+                : "Published workshops, CTFs, and seminars will appear here once scheduled."}
             </p>
+            {(search || mode !== "ALL") && (
+              <div className="pt-2">
+                <Link
+                  href={`/events?filter=${filter}`}
+                  className="inline-block px-4 py-1.5 bg-brand-surface hover:bg-brand-red border border-brand-border rounded text-xs font-mono text-white transition-all"
+                >
+                  RESET FILTERS
+                </Link>
+              </div>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -139,7 +125,7 @@ export default async function EventsPage({
               const confirmed = evt._count.registrations;
               const seatsLeft = Math.max(0, evt.capacity - confirmed);
               const isFull = seatsLeft === 0;
-              const deadlinePassed = new Date() > evt.registrationDeadline;
+              const deadlinePassed = new Date() > new Date(evt.registrationDeadline);
 
               return (
                 <div
@@ -213,3 +199,4 @@ export default async function EventsPage({
     </div>
   );
 }
+

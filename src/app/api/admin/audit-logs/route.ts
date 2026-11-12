@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { ROLES } from "@/lib/constants";
+import { getAuditLogs } from "@/services/siteService";
 
 export async function GET(req: NextRequest) {
   try {
@@ -11,30 +11,11 @@ export async function GET(req: NextRequest) {
     }
 
     const { searchParams } = new URL(req.url);
-    const search = searchParams.get("search");
+    const search = searchParams.get("search") || undefined;
 
-    const where: any = {};
-    if (search) {
-      where.OR = [
-        { action: { contains: search } },
-        { entityType: { contains: search } },
-        { details: { contains: search } },
-      ];
-    }
-
-    const logs = await prisma.auditLog.findMany({
-      where,
-      take: 100,
-      orderBy: { createdAt: "desc" },
-      include: {
-        user: {
-          select: { name: true, email: true, role: true },
-        },
-      },
-    });
-
+    const logs = await getAuditLogs(search, 100);
     return NextResponse.json({ success: true, logs });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: "Failed to fetch audit logs" }, { status: 500 });
   }
 }

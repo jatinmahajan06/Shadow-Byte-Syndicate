@@ -1,16 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { getAdminDb, FieldValue } from "@/firebase/admin";
 import { getCurrentUser } from "@/lib/auth";
 import { siteSettingsSchema } from "@/lib/validators";
 import { ROLES } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
+import { getSiteSettings } from "@/services/siteService";
+import { toSerializable } from "@/services/firestoreConverters";
 
 export async function GET() {
   try {
-    const settings = await prisma.siteSettings.findUnique({
-      where: { id: "default" },
-    });
+    const user = await getCurrentUser();
+    if (!user || user.role !== ROLES.SUPER_ADMIN) {
+      return NextResponse.json(
+        { error: "Forbidden: Super Admin access required." },
+        { status: 403 }
+      );
+    }
 
+    const settings = await getSiteSettings();
     return NextResponse.json({ success: true, settings });
   } catch (error) {
     console.error("[Site Settings GET Error]", error);
@@ -21,7 +28,6 @@ export async function GET() {
 export async function PUT(req: NextRequest) {
   try {
     const user = await getCurrentUser();
-    // STRICT CHECK: Coordinators CANNOT edit site settings or branding!
     if (!user || user.role !== ROLES.SUPER_ADMIN) {
       return NextResponse.json(
         { error: "Forbidden: Only Super Administrators can modify site settings." },
@@ -38,26 +44,31 @@ export async function PUT(req: NextRequest) {
       );
     }
 
-    const updated = await prisma.siteSettings.upsert({
-      where: { id: "default" },
-      create: {
-        id: "default",
+    const db = getAdminDb();
+    const ref = db.collection("siteSettings").doc("default");
+
+    await ref.set(
+      {
         ...parsed.data,
+        updatedAt: FieldValue.serverTimestamp(),
       },
-      update: {
-        ...parsed.data,
-      },
-    });
+      { merge: true }
+    );
 
     await logAudit({
       action: "SITE_SETTINGS_UPDATED",
       entityType: "SiteSettings",
       entityId: "default",
       details: { updatedBy: user.email },
-      userId: user.id,
+      userId: user.uid,
+      userEmail: user.email,
     });
 
-    return NextResponse.json({ success: true, settings: updated });
+    const updatedSnap = await ref.get();
+    return NextResponse.json({
+      success: true,
+      settings: toSerializable({ id: "default", ...updatedSnap.data() }),
+    });
   } catch (error) {
     console.error("[Site Settings PUT Error]", error);
     return NextResponse.json({ error: "Failed to update settings" }, { status: 500 });

@@ -84,7 +84,7 @@ export default function ContactForm() {
             required
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            placeholder="Ada Lovelace"
+            placeholder="Enter your full name"
             className="w-full p-2.5 bg-brand-black border border-brand-border rounded text-xs font-mono text-white focus:outline-none focus:border-brand-red"
           />
         </div>
@@ -96,7 +96,7 @@ export default function ContactForm() {
             required
             value={formData.email}
             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-            placeholder="ada@college.edu"
+            placeholder="Enter your email address"
             className="w-full p-2.5 bg-brand-black border border-brand-border rounded text-xs font-mono text-white focus:outline-none focus:border-brand-red"
           />
         </div>
@@ -109,7 +109,7 @@ export default function ContactForm() {
           required
           value={formData.subject}
           onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
-          placeholder="Workshop Inquiry / Academic Partnership"
+          placeholder="Enter inquiry subject"
           className="w-full p-2.5 bg-brand-black border border-brand-border rounded text-xs font-mono text-white focus:outline-none focus:border-brand-red"
         />
       </div>
@@ -137,3 +137,4 @@ export default function ContactForm() {
     </form>
   );
 }
+

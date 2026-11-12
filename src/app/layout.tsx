@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AuthProvider } from "@/context/AuthContext";
 import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
 import { BRAND } from "@/lib/constants";
@@ -40,10 +41,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className="min-h-screen flex flex-col bg-[#050508] text-slate-200 antialiased selection:bg-brand-red selection:text-white">
-        <Navbar />
-        <main className="flex-grow">{children}</main>
-        <Footer />
+      <body className="min-h-screen flex flex-col bg-[#050508] text-slate-200 antialiased selection:bg-brand-red selection:text-white overflow-x-hidden">
+        <AuthProvider>
+          <Navbar />
+          <main className="flex-grow min-w-0">{children}</main>
+          <Footer />
+        </AuthProvider>
       </body>
     </html>
   );

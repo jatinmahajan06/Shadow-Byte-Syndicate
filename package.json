@@ -8,24 +8,20 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
-    "db:push": "prisma db push",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:seed": "tsx prisma/seed.ts",
-    "admin:bootstrap": "tsx scripts/bootstrap-admin.ts"
-  },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx scripts/seed-firebase.ts",
+    "db:cleanup-demo": "tsx scripts/cleanup-demo-content.ts",
+    "admin:bootstrap": "tsx scripts/bootstrap-admin.ts",
+    "emulators:start": "firebase emulators:start --project demo-shadow-byte-syndicate",
+    "functions:build": "npm --prefix functions run build"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.4.2",
-    "@prisma/client": "^5.14.0",
-    "bcryptjs": "^2.4.3",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
+    "firebase": "^13.2.0",
+    "firebase-admin": "^14.5.0",
     "framer-motion": "^11.2.4",
     "isomorphic-dompurify": "^2.11.0",
-    "jose": "^5.3.0",
     "lucide-react": "^0.378.0",
     "next": "^14.2.35",
     "react": "^18.3.1",
@@ -35,18 +31,16 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@databases/pg-test": "^4.0.0",
-    "@types/bcryptjs": "^2.4.6",
-    "@types/node": "^20.12.7",
-    "@types/react": "^18.3.1",
+    "@types/node": "20.19.43",
+    "@types/react": "18.3.31",
     "@types/react-dom": "^18.3.1",
     "autoprefixer": "^10.4.19",
     "dotenv": "^16.4.5",
+    "firebase-tools": "^15.35.0",
     "postcss": "^8.4.38",
-    "prisma": "^5.14.0",
     "tailwindcss": "^3.4.3",
     "tsx": "^4.11.0",
-    "typescript": "^5.4.5",
+    "typescript": "5.9.3",
     "vitest": "^1.6.0"
   }
 }

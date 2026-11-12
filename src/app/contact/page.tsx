@@ -1,8 +1,9 @@
 import React from "react";
-import { prisma } from "@/lib/prisma";
+import { getSiteSettings } from "@/services/siteService";
 import ContactForm from "@/components/contact/ContactForm";
 import { Mail, Shield, MessageSquare, Terminal, MapPin } from "lucide-react";
-import { BRAND } from "@/lib/constants";
+
+export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "Contact & Inquiries",
@@ -10,9 +11,7 @@ export const metadata = {
 };
 
 export default async function ContactPage() {
-  const settings = await prisma.siteSettings.findUnique({
-    where: { id: "default" },
-  });
+  const settings = await getSiteSettings();
 
   return (
     <div className="py-12 lg:py-16">
@@ -42,17 +41,27 @@ export default async function ContactPage() {
               <div className="space-y-3 text-xs font-mono text-brand-gray-text">
                 <div>
                   <span className="text-brand-gray-dim uppercase block text-[10px]">Administrative Email</span>
-                  <a
-                    href={`mailto:${settings?.contactEmail || "contact@shadowbyte.club"}`}
-                    className="text-white hover:text-brand-redBright font-medium"
-                  >
-                    {settings?.contactEmail || "contact@shadowbyte.club"}
-                  </a>
+                  {settings?.contactEmail ? (
+                    <a
+                      href={`mailto:${settings.contactEmail}`}
+                      className="text-white hover:text-brand-redBright font-medium break-all"
+                    >
+                      {settings.contactEmail}
+                    </a>
+                  ) : (
+                    <span className="text-brand-gray-muted italic">
+                      Not configured yet — submit inquiries via the form.
+                    </span>
+                  )}
                 </div>
 
                 <div>
-                  <span className="text-brand-gray-dim uppercase block text-[10px]">Headquarters</span>
-                  <span className="text-white">Cyber Defense Center, Main Campus</span>
+                  <span className="text-brand-gray-dim uppercase block text-[10px]">Location / Headquarters</span>
+                  {settings?.headquarters ? (
+                    <span className="text-white">{settings.headquarters}</span>
+                  ) : (
+                    <span className="text-brand-gray-muted italic">Not configured yet</span>
+                  )}
                 </div>
 
                 <div>
@@ -81,3 +90,4 @@ export default async function ContactPage() {
     </div>
   );
 }
+

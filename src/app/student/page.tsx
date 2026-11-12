@@ -1,11 +1,12 @@
 import React from "react";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
-import { ROLES, PUBLISH_STATUS, REGISTRATION_STATUS } from "@/lib/constants";
+import { ROLES, REGISTRATION_STATUS } from "@/lib/constants";
+import { getStudentRegistrations, getPublishedEvents } from "@/services/eventService";
 import StudentDashboardClient from "@/components/dashboard/StudentDashboardClient";
-import { User, Calendar, CheckCircle2, ShieldAlert, Award } from "lucide-react";
+
+export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "Student Dashboard",
@@ -26,42 +27,20 @@ export default async function StudentDashboardPage() {
     redirect("/");
   }
 
-  // Fetch only the logged-in student's registrations
-  const registrations = await prisma.eventRegistration.findMany({
-    where: { studentId: user.id },
-    include: {
-      event: {
-        select: {
-          id: true,
-          slug: true,
-          title: true,
-          summary: true,
-          startDate: true,
-          endDate: true,
-          venue: true,
-          mode: true,
-          status: true,
-          category: true,
-        },
-      },
-    },
-    orderBy: { registeredAt: "desc" },
-  });
+  const [registrations, allUpcoming] = await Promise.all([
+    getStudentRegistrations(user.uid),
+    getPublishedEvents({ filter: "upcoming" }),
+  ]);
 
-  // Fetch upcoming open events that student hasn't registered for yet
-  const registeredEventIds = registrations
-    .filter((r) => r.status === REGISTRATION_STATUS.CONFIRMED)
-    .map((r) => r.eventId);
+  const registeredEventIds = new Set(
+    registrations
+      .filter((r: any) => r.status === REGISTRATION_STATUS.CONFIRMED)
+      .map((r: any) => r.eventId)
+  );
 
-  const upcomingEvents = await prisma.event.findMany({
-    where: {
-      status: PUBLISH_STATUS.PUBLISHED,
-      startDate: { gte: new Date() },
-      id: { notIn: registeredEventIds },
-    },
-    take: 4,
-    orderBy: { startDate: "asc" },
-  });
+  const upcomingEvents = allUpcoming
+    .filter((evt) => !registeredEventIds.has(evt.id))
+    .slice(0, 4);
 
   return (
     <div className="py-10 lg:py-14">
@@ -108,3 +87,4 @@ export default async function StudentDashboardPage() {
     </div>
   );
 }
+

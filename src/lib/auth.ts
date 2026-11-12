@@ -1,44 +1,35 @@
-import { SignJWT, jwtVerify } from "jose";
-import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import { prisma } from "./prisma";
+import { getAdminAuth, getAdminDb, isFirebaseAdminConfigured } from "@/firebase/admin";
 import { ROLES, UserRole } from "./constants";
 
-const COOKIE_NAME = "sbs_session_token";
-const SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || "sbs_super_secret_jwt_key_at_least_32_chars_long"
-);
+export const SESSION_COOKIE_NAME = "sbs_firebase_session";
+const SESSION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, 12);
+export interface AuthUser {
+  id: string;
+  uid: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  isActive: boolean;
+  studentId: string | null;
+  department: string | null;
+  phone?: string | null;
+  photoURL?: string | null;
 }
 
-export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  return bcrypt.compare(password, hash);
-}
-
-export async function createSession(userId: string, role: string, ipAddress?: string, userAgent?: string) {
-  const token = await new SignJWT({ userId, role })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime("7d")
-    .sign(SECRET);
-
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-  // Store in database for server-side state and instant revocation
-  await prisma.session.create({
-    data: {
-      token,
-      userId,
-      expiresAt,
-      ipAddress: ipAddress || null,
-      userAgent: userAgent || null,
-    },
+/**
+ * Exchanges a verified Firebase Auth ID token for a secure HTTP-only Firebase Session Cookie.
+ */
+export async function createFirebaseSessionCookie(idToken: string) {
+  const adminAuth = getAdminAuth();
+  const sessionCookie = await adminAuth.createSessionCookie(idToken, {
+    expiresIn: SESSION_EXPIRY_MS,
   });
 
-  // Set HTTP-only secure cookie
-  cookies().set(COOKIE_NAME, token, {
+  const expiresAt = new Date(Date.now() + SESSION_EXPIRY_MS);
+
+  cookies().set(SESSION_COOKIE_NAME, sessionCookie, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
@@ -46,22 +37,22 @@ export async function createSession(userId: string, role: string, ipAddress?: st
     expires: expiresAt,
   });
 
-  return token;
+  return sessionCookie;
 }
 
-export async function destroySession() {
-  const token = cookies().get(COOKIE_NAME)?.value;
-  if (token) {
+/**
+ * Clears the HTTP-only session cookie and optionally revokes refresh tokens.
+ */
+export async function destroySession(uid?: string) {
+  if (uid && isFirebaseAdminConfigured()) {
     try {
-      await prisma.session.deleteMany({
-        where: { token },
-      });
-    } catch (e) {
-      // Ignored if session already deleted
+      await getAdminAuth().revokeRefreshTokens(uid);
+    } catch {
+      // Non-fatal if user doesn't exist or emulator restarted
     }
   }
 
-  cookies().set(COOKIE_NAME, "", {
+  cookies().set(SESSION_COOKIE_NAME, "", {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
@@ -70,53 +61,47 @@ export async function destroySession() {
   });
 }
 
-export interface AuthUser {
-  id: string;
-  email: string;
-  name: string;
-  role: UserRole;
-  isActive: boolean;
-  studentId: string | null;
-  department: string | null;
-}
-
+/**
+ * Verifies the Firebase session cookie on the server, fetches fresh user profile
+ * from Cloud Firestore `users/{uid}`, and guarantees account is active.
+ */
 export async function getCurrentUser(): Promise<AuthUser | null> {
   try {
-    const token = cookies().get(COOKIE_NAME)?.value;
-    if (!token) return null;
+    if (!isFirebaseAdminConfigured()) return null;
 
-    const { payload } = await jwtVerify(token, SECRET);
-    const userId = payload.userId as string;
-    if (!userId) return null;
+    const sessionCookie = cookies().get(SESSION_COOKIE_NAME)?.value;
+    if (!sessionCookie) return null;
 
-    // Strict freshness: Check database directly to ensure account is active and role is current
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        isActive: true,
-        studentId: true,
-        department: true,
-      },
-    });
+    const adminAuth = getAdminAuth();
+    const adminDb = getAdminDb();
 
-    if (!user || !user.isActive) {
+    // Verify cookie and ensure tokens haven't been revoked
+    const decoded = await adminAuth.verifySessionCookie(sessionCookie, true);
+    const uid = decoded.uid;
+    if (!uid) return null;
+
+    // Strict freshness: Check Firestore profile directly
+    const userDoc = await adminDb.collection("users").doc(uid).get();
+    if (!userDoc.exists) return null;
+
+    const data = userDoc.data()!;
+    if (data.isActive === false) {
       return null;
     }
 
     return {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role as UserRole,
-      isActive: user.isActive,
-      studentId: user.studentId,
-      department: user.department,
+      id: uid,
+      uid,
+      email: data.email || decoded.email || "",
+      name: data.name || decoded.name || "User",
+      role: (data.role || ROLES.STUDENT) as UserRole,
+      isActive: data.isActive !== false,
+      studentId: data.studentId || null,
+      department: data.department || null,
+      phone: data.phone || null,
+      photoURL: data.photoURL || null,
     };
-  } catch (error) {
+  } catch {
     return null;
   }
 }

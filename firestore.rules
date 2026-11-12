@@ -1,0 +1,787 @@
+rules_version = '2';
+
+// =============================================================================
+// Shadow Byte Syndicate (SBS) — Cloud Firestore Security Rules (Prototype)
+// =============================================================================
+//
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {uid} (Firebase Auth UID)
+// Fields:
+//   - uid: string (required, immutable, == {uid}) - Firebase Auth UID
+//   - email: string (required, immutable, valid email, <= 200 chars)
+//   - name: string (required, 2..100 chars) - Member display name
+//   - role: string (required, immutable on client, in ['SUPER_ADMIN', 'COORDINATOR', 'STUDENT'])
+//   - isActive: bool (required, immutable on client) - Account activation status
+//   - studentId: string | null (optional, <= 50 chars) - Collegiate roll number
+//   - department: string | null (optional, <= 100 chars) - Academic department
+//   - phone: string | null (optional, <= 20 chars) - Contact phone
+//   - photoURL: string | null (optional, valid http/https URL, <= 1000 chars)
+//   - preferences: map (optional, keys only ['notifications', 'theme'])
+//       - notifications: bool (optional)
+//       - theme: string (optional, in ['dark', 'light', 'system'])
+//   - registrationCount: int (optional, immutable on client, >= 0)
+//   - lastLoginAt: timestamp (optional, immutable on client, set by Admin SDK)
+//   - createdAt: timestamp (required, immutable)
+//   - updatedAt: timestamp (required, == request.time on client update)
+//
+// Subcollection: users/{uid}/activityHistory
+// Document ID: {activityId} (auto-generated)
+// Fields:
+//   - action: string (required, client create restricted to 'PROFILE_UPDATED')
+//   - description: string (required, 1..300 chars)
+//   - metadata: map (required, keys only ['updatedFields'], size <= 5)
+//       - updatedFields: list<string> (required, 1..7 items, allowed user profile keys only)
+//   - createdAt: timestamp (required, immutable, == request.time on create)
+//
+// Collection: siteSettings
+// Document ID: {docId} (primarily 'default')
+// Fields:
+//   - id: string (optional, == 'default')
+//   - clubName: string (required, 2..100 chars)
+//   - supportingLine: string (required, 2..150 chars)
+//   - mainTagline: string (required, 2..200 chars)
+//   - secondaryPhrase: string (required, 0..100 chars)
+//   - contactEmail: string (required, '' or valid email, <= 200 chars)
+//   - headquarters: string | null (optional, 0..200 chars)
+//   - timezone: string (required, 2..64 chars)
+//   - instagramHandle: string (required, 0..100 chars)
+//   - youtubeChannel: string (required, 0..100 chars)
+//   - discordInvite: string (required, 0..100 chars)
+//   - bannerUrl: string (required, valid URL or /assets/ path, <= 1000 chars)
+//   - shieldLogoUrl: string (required, valid URL or /assets/ path, <= 1000 chars)
+//   - aboutSummary: string (required, 10..3000 chars)
+//   - ethicsStatement: string (required, 10..5000 chars)
+//   - updatedAt: timestamp (required, == request.time on client write)
+//
+// Collection: events
+// Document ID: {eventId} (auto-generated)
+// Fields:
+//   - title: string (required, 3..200 chars)
+//   - slug: string (required, 3..200 chars, matches ^[a-z0-9-]+$)
+//   - summary: string (required, 10..500 chars)
+//   - description: string (required, 20..20000 chars)
+//   - bannerUrl: string | null (optional, valid URL or /assets/ path, <= 1000 chars)
+//   - mode: string (required, in ['IN_PERSON', 'VIRTUAL', 'HYBRID'])
+//   - venue: string (required, 2..200 chars)
+//   - locationUrl: string | null (optional, '' or valid http/https URL, <= 1000 chars)
+//   - startDate: timestamp (required)
+//   - endDate: timestamp (required, >= startDate)
+//   - registrationDeadline: timestamp (required)
+//   - capacity: int (required, 1..100000)
+//   - registeredCount: int (optional/0 on create, immutable on client, 0..100000)
+//   - status: string (required, in ['DRAFT', 'PUBLISHED', 'ARCHIVED', 'CANCELLED'])
+//   - isRegistrationOpen: bool (required)
+//   - category: string (required, 1..100 chars)
+//   - createdById: string (required, immutable, == request.auth.uid on create, <= 128 chars)
+//   - createdByName: string | null (optional, immutable, <= 100 chars)
+//   - createdByEmail: string | null (optional, immutable, <= 200 chars)
+//   - createdByRole: string | null (optional, immutable, in ['SUPER_ADMIN', 'COORDINATOR'])
+//   - updatedById: string | null (optional, == request.auth.uid on client update if non-null)
+//   - createdAt: timestamp (required, immutable, == request.time on create)
+//   - updatedAt: timestamp (required, == request.time on write)
+//
+// Collection: eventRegistrations (Server Admin SDK / Cloud Function transactional writes only)
+// Document ID: {regId} (${eventId}_${studentUid})
+// Fields:
+//   - eventId, eventTitle, eventSlug, eventSummary, eventBannerUrl, eventStartDate,
+//     eventEndDate, eventVenue, eventMode, eventCategory
+//   - studentId (UID), studentName, studentEmail, studentRollId, studentDepartment, studentPhone
+//   - status ('CONFIRMED' | 'CANCELLED' | 'ATTENDED'), notes, registeredAt, updatedAt
+//
+// Collection: posts
+// Document ID: {postId} (auto-generated)
+// Fields:
+//   - title: string (required, 3..250 chars)
+//   - slug: string (required, 3..250 chars, matches ^[a-z0-9-]+$)
+//   - excerpt: string (required, 10..500 chars)
+//   - content: string (required, 20..100000 chars)
+//   - coverImage: string | null (optional, valid URL or /assets/ path, <= 1000 chars)
+//   - category: string (required, 1..100 chars)
+//   - tags: string | null (optional, <= 500 chars)
+//   - status: string (required, in ['DRAFT', 'PUBLISHED', 'ARCHIVED'])
+//   - publishedAt: timestamp | null (optional)
+//   - createdById: string (required, immutable, == request.auth.uid on create, <= 128 chars)
+//   - createdByName: string | null (optional, immutable, <= 100 chars)
+//   - createdByRole: string | null (optional, immutable, in ['SUPER_ADMIN', 'COORDINATOR'])
+//   - createdByEmail: string | null (optional, immutable, <= 200 chars)
+//   - updatedById: string | null (optional, == request.auth.uid on client update if non-null)
+//   - createdAt: timestamp (required, immutable, == request.time on create)
+//   - updatedAt: timestamp (required, == request.time on write)
+//
+// Collection: teamMembers
+// Document ID: {memberId} (auto-generated)
+// Fields:
+//   - name: string (required, 2..100 chars)
+//   - role: string (required, 2..100 chars)
+//   - category: string (required, in ['FACULTY', 'CORE_TEAM', 'LEAD', 'ADVISOR'])
+//   - bio: string (required, 10..1000 chars)
+//   - photoUrl: string | null (optional, valid URL or /assets/ path, <= 1000 chars)
+//   - email: string | null (optional, '' or valid email, <= 200 chars)
+//   - githubUrl: string | null (optional, '' or valid URL, <= 500 chars)
+//   - linkedinUrl: string | null (optional, '' or valid URL, <= 500 chars)
+//   - displayOrder: int (required, 0..10000)
+//   - isActive: bool (required)
+//   - createdAt: timestamp (required, immutable, == request.time on create)
+//   - updatedAt: timestamp (required, == request.time on write)
+//
+// Collection: resources
+// Document ID: {resourceId} (auto-generated)
+// Fields:
+//   - title: string (required, 3..200 chars)
+//   - description: string (required, 10..1000 chars)
+//   - category: string (required, 2..100 chars)
+//   - url: string (required, valid http/https URL, <= 1000 chars)
+//   - difficulty: string (required, in ['Beginner', 'Intermediate', 'Advanced'])
+//   - isPublished: bool (required)
+//   - createdAt: timestamp (required, immutable, == request.time on create)
+//   - updatedAt: timestamp (required, == request.time on write)
+//
+// Collection: gallery
+// Document ID: {itemId} (auto-generated)
+// Fields:
+//   - title: string (required, 1..200 chars)
+//   - caption: string | null (optional, <= 500 chars)
+//   - imageUrl: string (required, valid URL or /assets/ path, <= 1000 chars)
+//   - eventTag: string | null (optional, <= 100 chars)
+//   - displayOrder: int (required, 0..10000)
+//   - createdAt: timestamp (required, immutable, == request.time on create)
+//   - updatedAt: timestamp (optional, == request.time if set)
+//
+// Collection: contactMessages (Created via rate-limited server API only)
+// Document ID: {messageId} (auto-generated)
+// Fields:
+//   - name: string (required, immutable, 2..100 chars)
+//   - email: string (required, immutable, valid email, <= 200 chars)
+//   - subject: string (required, immutable, 3..200 chars)
+//   - message: string (required, immutable, 10..5000 chars)
+//   - isRead: bool (required)
+//   - respondedAt: timestamp | null (optional)
+//   - createdAt: timestamp (required, immutable)
+//
+// Collection: auditLogs (Written exclusively via server Admin SDK & Cloud Functions)
+// Document ID: {logId} (auto-generated)
+// Fields:
+//   - action, entityType, entityId, details, userId, userEmail, ipAddress, createdAt
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions — Authentication & Authoritative RBAC
+    // ===============================================================
+
+    // Check if the user has a valid Firebase Auth token
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if user owns the resource based on path UID parameter
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Check if user owns the resource based on document's uid field
+    function isDocOwner() {
+      return isAuthenticated() && resource != null && resource.data.uid == request.auth.uid;
+    }
+
+    // Verify uid field hasn't been tampered with on create
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+             request.resource.data.uid == request.auth.uid;
+    }
+
+    // Ensure uid field is not modified on update
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+             request.resource.data.uid == resource.data.uid;
+    }
+
+    // Authoritative user profile lookup path for the authenticated caller
+    function callerUserPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    // Verify the authenticated caller has a provisioned profile in users/{uid}
+    function callerUserExists() {
+      return isAuthenticated() && exists(callerUserPath());
+    }
+
+    // Retrieve the authenticated caller's authoritative profile data
+    function callerUserData() {
+      return get(callerUserPath()).data;
+    }
+
+    // Active token claim check:
+    // Handles absent claim safely without undefined property errors while
+    // rejecting revoked/disabled claims (`isActive: false` or non-bool).
+    function tokenNotDeactivated() {
+      return !('isActive' in request.auth.token) ||
+             request.auth.token.isActive == true;
+    }
+
+    // Verify caller's authoritative users/{uid} document marks the account active
+    function callerIsActiveDoc() {
+      return callerUserExists() &&
+             'isActive' in callerUserData() &&
+             callerUserData().isActive == true;
+    }
+
+    // Active account check:
+    // Fast-rejects disabled/revoked tokens via Custom Claim `isActive`,
+    // and cross-checks authoritative `users/{request.auth.uid}` so immediate
+    // deactivation takes effect even before JWT expiration.
+    function isActiveAccount() {
+      return isAuthenticated() &&
+             tokenNotDeactivated() &&
+             callerIsActiveDoc();
+    }
+
+    // Authoritative RBAC check:
+    // Fast-rejects in memory using token `isActive` and `role` claims before
+    // cross-checking authoritative `users/{uid}` (1 cached read, only for claimed role).
+    function hasRole(role) {
+      return isAuthenticated() &&
+             tokenNotDeactivated() &&
+             'role' in request.auth.token &&
+             request.auth.token.role == role &&
+             callerIsActiveDoc() &&
+             'role' in callerUserData() &&
+             callerUserData().role == role;
+    }
+
+    function isSuperAdmin() {
+      return hasRole('SUPER_ADMIN');
+    }
+
+    function isCoordinator() {
+      return hasRole('COORDINATOR');
+    }
+
+    function isStudent() {
+      return hasRole('STUDENT');
+    }
+
+    function isStaff() {
+      return isSuperAdmin() || isCoordinator();
+    }
+
+    // ===============================================================
+    // Helper Functions — Schema & Data Validation
+    // ===============================================================
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function validStringValue(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+             email.size() <= 200 &&
+             email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string &&
+             url.size() <= 1000 &&
+             (url.matches("^https://.+") || url.matches("^http://.+"));
+    }
+
+    function isValidMediaUrlOrAssetPath(val) {
+      return val is string &&
+             val.size() > 0 &&
+             val.size() <= 1000 &&
+             ((val.matches("^/assets/[a-zA-Z0-9._/-]+$") && !val.matches(".*\\.\\..*")) ||
+              val.matches("^https://.+") ||
+              val.matches("^http://.+"));
+    }
+
+    function isValidSlug(slug) {
+      return slug is string &&
+             slug.size() >= 3 &&
+             slug.size() <= 250 &&
+             slug.matches("^[a-z0-9-]+$");
+    }
+
+    function isValidOptionalNullableString(data, field, minLen, maxLen) {
+      return !(field in data) ||
+             data[field] == null ||
+             (data[field] is string &&
+              data[field].size() >= minLen &&
+              data[field].size() <= maxLen);
+    }
+
+    function isValidOptionalNullableEmailOrEmpty(data, field) {
+      return !(field in data) ||
+             data[field] == null ||
+             data[field] == "" ||
+             isValidEmail(data[field]);
+    }
+
+    function isValidOptionalNullableUrlOrEmpty(data, field, maxLen) {
+      return !(field in data) ||
+             data[field] == null ||
+             data[field] == "" ||
+             (data[field] is string &&
+              data[field].size() <= maxLen &&
+              isValidUrl(data[field]));
+    }
+
+    function isValidOptionalNullableMediaUrl(data, field) {
+      return !(field in data) ||
+             data[field] == null ||
+             data[field] == "" ||
+             isValidMediaUrlOrAssetPath(data[field]);
+    }
+
+    // ===============================================================
+    // Domain Validators (Used in BOTH create and update rules)
+    // ===============================================================
+
+    function isValidUserPreferences(prefs) {
+      return prefs is map &&
+             prefs.keys().hasOnly(['notifications', 'theme']) &&
+             (!('notifications' in prefs) || prefs.notifications is bool) &&
+             (!('theme' in prefs) || (prefs.theme is string && prefs.theme in ['dark', 'light', 'system']));
+    }
+
+    function isValidUserProfile(data, uid) {
+      return hasOnlyAllowedFields([
+               'uid', 'email', 'name', 'role', 'isActive', 'studentId',
+               'department', 'phone', 'photoURL', 'preferences',
+               'registrationCount', 'lastLoginAt', 'createdAt', 'updatedAt'
+             ]) &&
+             hasRequiredFields(['uid', 'email', 'name', 'role', 'isActive', 'createdAt', 'updatedAt']) &&
+             validStringValue(data.uid, 1, 128) && data.uid == uid &&
+             isValidEmail(data.email) &&
+             validStringValue(data.name, 2, 100) &&
+             data.role in ['SUPER_ADMIN', 'COORDINATOR', 'STUDENT'] &&
+             data.isActive is bool &&
+             isValidOptionalNullableString(data, 'studentId', 0, 50) &&
+             isValidOptionalNullableString(data, 'department', 0, 100) &&
+             isValidOptionalNullableString(data, 'phone', 0, 20) &&
+             isValidOptionalNullableUrlOrEmpty(data, 'photoURL', 1000) &&
+             (!('preferences' in data) || data.preferences == null || isValidUserPreferences(data.preferences)) &&
+             (!('registrationCount' in data) || (data.registrationCount is int && data.registrationCount >= 0 && data.registrationCount <= 100000)) &&
+             (!('lastLoginAt' in data) || data.lastLoginAt == null || data.lastLoginAt is timestamp) &&
+             data.createdAt is timestamp &&
+             data.updatedAt is timestamp;
+    }
+
+    function isValidClientActivityEntry(data) {
+      return hasOnlyAllowedFields(['action', 'description', 'metadata', 'createdAt']) &&
+             hasRequiredFields(['action', 'description', 'metadata', 'createdAt']) &&
+             data.action == 'PROFILE_UPDATED' &&
+             validStringValue(data.description, 1, 300) &&
+             data.metadata is map &&
+             data.metadata.keys().hasOnly(['updatedFields']) &&
+             data.metadata.size() == 1 &&
+             data.metadata.updatedFields is list &&
+             data.metadata.updatedFields.size() >= 1 &&
+             data.metadata.updatedFields.size() <= 7 &&
+             data.metadata.updatedFields.hasOnly([
+               'name', 'studentId', 'department', 'phone', 'photoURL', 'preferences', 'updatedAt'
+             ]) &&
+             data.createdAt == request.time;
+    }
+
+    function isValidSiteSettings(data) {
+      return hasOnlyAllowedFields([
+               'id', 'clubName', 'supportingLine', 'mainTagline', 'secondaryPhrase',
+               'contactEmail', 'headquarters', 'timezone', 'instagramHandle',
+               'youtubeChannel', 'discordInvite', 'bannerUrl', 'shieldLogoUrl',
+               'aboutSummary', 'ethicsStatement', 'updatedAt'
+             ]) &&
+             hasRequiredFields([
+               'clubName', 'supportingLine', 'mainTagline', 'secondaryPhrase',
+               'contactEmail', 'timezone', 'instagramHandle', 'youtubeChannel',
+               'discordInvite', 'bannerUrl', 'shieldLogoUrl', 'aboutSummary',
+               'ethicsStatement', 'updatedAt'
+             ]) &&
+             (!('id' in data) || (data.id is string && data.id == 'default')) &&
+             validStringValue(data.clubName, 2, 100) &&
+             validStringValue(data.supportingLine, 2, 150) &&
+             validStringValue(data.mainTagline, 2, 200) &&
+             validStringValue(data.secondaryPhrase, 0, 100) &&
+             (data.contactEmail == "" || isValidEmail(data.contactEmail)) &&
+             isValidOptionalNullableString(data, 'headquarters', 0, 200) &&
+             validStringValue(data.timezone, 2, 64) &&
+             validStringValue(data.instagramHandle, 0, 100) &&
+             validStringValue(data.youtubeChannel, 0, 100) &&
+             validStringValue(data.discordInvite, 0, 100) &&
+             isValidMediaUrlOrAssetPath(data.bannerUrl) &&
+             isValidMediaUrlOrAssetPath(data.shieldLogoUrl) &&
+             validStringValue(data.aboutSummary, 10, 3000) &&
+             validStringValue(data.ethicsStatement, 10, 5000) &&
+             data.updatedAt == request.time;
+    }
+
+    function isValidEvent(data) {
+      return hasOnlyAllowedFields([
+               'title', 'slug', 'summary', 'description', 'bannerUrl', 'mode', 'venue',
+               'locationUrl', 'startDate', 'endDate', 'registrationDeadline',
+               'capacity', 'registeredCount', 'status', 'isRegistrationOpen', 'category',
+               'createdById', 'createdByName', 'createdByEmail', 'createdByRole',
+               'updatedById', 'createdAt', 'updatedAt'
+             ]) &&
+             hasRequiredFields([
+               'title', 'slug', 'summary', 'description', 'mode', 'venue',
+               'startDate', 'endDate', 'registrationDeadline', 'capacity',
+               'status', 'isRegistrationOpen', 'category', 'createdById',
+               'createdAt', 'updatedAt'
+             ]) &&
+             validStringValue(data.title, 3, 200) &&
+             isValidSlug(data.slug) &&
+             data.slug.size() <= 200 &&
+             validStringValue(data.summary, 10, 500) &&
+             validStringValue(data.description, 20, 20000) &&
+             isValidOptionalNullableMediaUrl(data, 'bannerUrl') &&
+             data.mode in ['IN_PERSON', 'VIRTUAL', 'HYBRID'] &&
+             validStringValue(data.venue, 2, 200) &&
+             isValidOptionalNullableUrlOrEmpty(data, 'locationUrl', 1000) &&
+             data.startDate is timestamp &&
+             data.endDate is timestamp &&
+             data.endDate >= data.startDate &&
+             data.registrationDeadline is timestamp &&
+             data.capacity is int && data.capacity > 0 && data.capacity <= 100000 &&
+             (!('registeredCount' in data) || (data.registeredCount is int && data.registeredCount >= 0 && data.registeredCount <= 100000)) &&
+             data.status in ['DRAFT', 'PUBLISHED', 'ARCHIVED', 'CANCELLED'] &&
+             data.isRegistrationOpen is bool &&
+             validStringValue(data.category, 1, 100) &&
+             validStringValue(data.createdById, 1, 128) &&
+             isValidOptionalNullableString(data, 'createdByName', 1, 100) &&
+             isValidOptionalNullableEmailOrEmpty(data, 'createdByEmail') &&
+             (!('createdByRole' in data) || data.createdByRole == null || data.createdByRole in ['SUPER_ADMIN', 'COORDINATOR']) &&
+             isValidOptionalNullableString(data, 'updatedById', 1, 128) &&
+             data.createdAt is timestamp &&
+             data.updatedAt == request.time;
+    }
+
+    function isValidPost(data) {
+      return hasOnlyAllowedFields([
+               'title', 'slug', 'excerpt', 'content', 'coverImage', 'category',
+               'tags', 'status', 'publishedAt', 'createdById', 'createdByName',
+               'createdByRole', 'createdByEmail', 'updatedById', 'createdAt', 'updatedAt'
+             ]) &&
+             hasRequiredFields([
+               'title', 'slug', 'excerpt', 'content', 'category', 'status',
+               'createdById', 'createdAt', 'updatedAt'
+             ]) &&
+             validStringValue(data.title, 3, 250) &&
+             isValidSlug(data.slug) &&
+             validStringValue(data.excerpt, 10, 500) &&
+             validStringValue(data.content, 20, 100000) &&
+             isValidOptionalNullableMediaUrl(data, 'coverImage') &&
+             validStringValue(data.category, 1, 100) &&
+             isValidOptionalNullableString(data, 'tags', 0, 500) &&
+             data.status in ['DRAFT', 'PUBLISHED', 'ARCHIVED'] &&
+             (!('publishedAt' in data) || data.publishedAt == null || data.publishedAt is timestamp) &&
+             validStringValue(data.createdById, 1, 128) &&
+             isValidOptionalNullableString(data, 'createdByName', 1, 100) &&
+             (!('createdByRole' in data) || data.createdByRole == null || data.createdByRole in ['SUPER_ADMIN', 'COORDINATOR']) &&
+             isValidOptionalNullableEmailOrEmpty(data, 'createdByEmail') &&
+             isValidOptionalNullableString(data, 'updatedById', 1, 128) &&
+             data.createdAt is timestamp &&
+             data.updatedAt == request.time;
+    }
+
+    function isValidTeamMember(data) {
+      return hasOnlyAllowedFields([
+               'name', 'role', 'category', 'bio', 'photoUrl', 'email',
+               'githubUrl', 'linkedinUrl', 'displayOrder', 'isActive',
+               'createdAt', 'updatedAt'
+             ]) &&
+             hasRequiredFields([
+               'name', 'role', 'category', 'bio', 'displayOrder', 'isActive',
+               'createdAt', 'updatedAt'
+             ]) &&
+             validStringValue(data.name, 2, 100) &&
+             validStringValue(data.role, 2, 100) &&
+             data.category in ['FACULTY', 'CORE_TEAM', 'LEAD', 'ADVISOR'] &&
+             validStringValue(data.bio, 10, 1000) &&
+             isValidOptionalNullableMediaUrl(data, 'photoUrl') &&
+             isValidOptionalNullableEmailOrEmpty(data, 'email') &&
+             isValidOptionalNullableUrlOrEmpty(data, 'githubUrl', 500) &&
+             isValidOptionalNullableUrlOrEmpty(data, 'linkedinUrl', 500) &&
+             data.displayOrder is int && data.displayOrder >= 0 && data.displayOrder <= 10000 &&
+             data.isActive is bool &&
+             data.createdAt is timestamp &&
+             data.updatedAt == request.time;
+    }
+
+    function isValidResource(data) {
+      return hasOnlyAllowedFields([
+               'title', 'description', 'category', 'url', 'difficulty',
+               'isPublished', 'createdAt', 'updatedAt'
+             ]) &&
+             hasRequiredFields([
+               'title', 'description', 'category', 'url', 'difficulty',
+               'isPublished', 'createdAt', 'updatedAt'
+             ]) &&
+             validStringValue(data.title, 3, 200) &&
+             validStringValue(data.description, 10, 1000) &&
+             validStringValue(data.category, 2, 100) &&
+             isValidUrl(data.url) &&
+             data.difficulty in ['Beginner', 'Intermediate', 'Advanced'] &&
+             data.isPublished is bool &&
+             data.createdAt is timestamp &&
+             data.updatedAt == request.time;
+    }
+
+    function isValidGalleryItem(data) {
+      return hasOnlyAllowedFields([
+               'title', 'caption', 'imageUrl', 'eventTag', 'displayOrder',
+               'createdAt', 'updatedAt'
+             ]) &&
+             hasRequiredFields(['title', 'imageUrl', 'displayOrder', 'createdAt']) &&
+             validStringValue(data.title, 1, 200) &&
+             isValidOptionalNullableString(data, 'caption', 0, 500) &&
+             isValidMediaUrlOrAssetPath(data.imageUrl) &&
+             isValidOptionalNullableString(data, 'eventTag', 0, 100) &&
+             data.displayOrder is int && data.displayOrder >= 0 && data.displayOrder <= 10000 &&
+             data.createdAt is timestamp &&
+             (!('updatedAt' in data) || data.updatedAt == request.time);
+    }
+
+    function isValidContactMessage(data) {
+      return hasOnlyAllowedFields([
+               'name', 'email', 'subject', 'message', 'isRead', 'respondedAt', 'createdAt'
+             ]) &&
+             hasRequiredFields(['name', 'email', 'subject', 'message', 'isRead', 'createdAt']) &&
+             validStringValue(data.name, 2, 100) &&
+             isValidEmail(data.email) &&
+             validStringValue(data.subject, 3, 200) &&
+             validStringValue(data.message, 10, 5000) &&
+             data.isRead is bool &&
+             (!('respondedAt' in data) || data.respondedAt == null || data.respondedAt is timestamp) &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // 1. User Profiles (Strict PII isolation; Admin SDK handles creation & deletion)
+    match /users/{uid} {
+      // Owner read uses short-circuit `request.auth.uid == uid` so AuthContext
+      // can subscribe cleanly without recursion and detect immediate deactivation.
+      allow read: if isAuthenticated() && (request.auth.uid == uid || isSuperAdmin());
+
+      allow create: if false;
+
+      allow update: if isOwner(uid) &&
+                       isActiveAccount() &&
+                       uidNotModified() &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                         'name', 'studentId', 'department', 'phone',
+                         'photoURL', 'preferences', 'updatedAt'
+                       ]) &&
+                       areImmutableFieldsUnchanged([
+                         'uid', 'email', 'role', 'isActive',
+                         'registrationCount', 'lastLoginAt', 'createdAt'
+                       ]) &&
+                       request.resource.data.updatedAt == request.time &&
+                       isValidUserProfile(request.resource.data, uid);
+
+      allow delete: if false;
+
+      // 1a. Per-User Activity History Subcollection (Immutable telemetry)
+      match /activityHistory/{activityId} {
+        allow read: if (isOwner(uid) && isActiveAccount()) || isSuperAdmin();
+
+        allow create: if isOwner(uid) &&
+                         isActiveAccount() &&
+                         exists(/databases/$(database)/documents/users/$(uid)) &&
+                         isValidClientActivityEntry(request.resource.data);
+
+        allow update, delete: if false;
+      }
+    }
+
+    // 2. Site Settings & Brand Configuration (Public read; Super Admin write)
+    match /siteSettings/{docId} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() && isValidSiteSettings(request.resource.data);
+      allow delete: if isSuperAdmin();
+    }
+
+    // 3. Club Events & CTFs
+    match /events/{eventId} {
+      allow read: if isStaff() || resource.data.status == 'PUBLISHED';
+
+      allow create: if isStaff() &&
+                       isValidEvent(request.resource.data) &&
+                       request.resource.data.createdById == request.auth.uid &&
+                       (!('createdByName' in request.resource.data) ||
+                        request.resource.data.createdByName == null ||
+                        ('name' in callerUserData() && request.resource.data.createdByName == callerUserData().name)) &&
+                       (!('createdByEmail' in request.resource.data) ||
+                        request.resource.data.createdByEmail == null ||
+                        ('email' in callerUserData() && request.resource.data.createdByEmail == callerUserData().email)) &&
+                       (!('createdByRole' in request.resource.data) ||
+                        request.resource.data.createdByRole == null ||
+                        request.resource.data.createdByRole == callerUserData().role) &&
+                       (!('registeredCount' in request.resource.data) || request.resource.data.registeredCount == 0) &&
+                       request.resource.data.createdAt == request.time;
+
+      allow update: if isStaff() &&
+                       isValidEvent(request.resource.data) &&
+                       areImmutableFieldsUnchanged([
+                         'createdById', 'createdByName', 'createdByEmail',
+                         'createdByRole', 'createdAt', 'registeredCount'
+                       ]) &&
+                       (!('updatedById' in request.resource.data) ||
+                        request.resource.data.updatedById == null ||
+                        request.resource.data.updatedById == request.auth.uid);
+
+      // Only Super Admin may permanently delete events
+      allow delete: if isSuperAdmin();
+    }
+
+    // 4. Event Registrations (Strictly isolated to owning Student & Super Admin; Coordinators denied)
+    // All mutations execute solely via atomic Admin SDK / Cloud Function transactions.
+    match /eventRegistrations/{regId} {
+      allow get: if isSuperAdmin() ||
+                    (isStudent() && (
+                      (resource != null && resource.data.studentId == request.auth.uid) ||
+                      (resource == null &&
+                       regId.size() > request.auth.uid.size() + 1 &&
+                       regId[regId.size() - request.auth.uid.size() - 1 : regId.size()] == ('_' + request.auth.uid))
+                    ));
+
+      allow list: if isSuperAdmin() ||
+                     (isStudent() && resource.data.studentId == request.auth.uid);
+
+      allow create, update, delete: if false;
+    }
+
+    // 5. Knowledge Hub Articles / Posts
+    match /posts/{postId} {
+      allow read: if isStaff() || resource.data.status == 'PUBLISHED';
+
+      allow create: if isStaff() &&
+                       isValidPost(request.resource.data) &&
+                       request.resource.data.createdById == request.auth.uid &&
+                       (!('createdByName' in request.resource.data) ||
+                        request.resource.data.createdByName == null ||
+                        ('name' in callerUserData() && request.resource.data.createdByName == callerUserData().name)) &&
+                       (!('createdByRole' in request.resource.data) ||
+                        request.resource.data.createdByRole == null ||
+                        request.resource.data.createdByRole == callerUserData().role) &&
+                       (!('createdByEmail' in request.resource.data) ||
+                        request.resource.data.createdByEmail == null ||
+                        ('email' in callerUserData() && request.resource.data.createdByEmail == callerUserData().email)) &&
+                       request.resource.data.createdAt == request.time;
+
+      allow update: if isStaff() &&
+                       isValidPost(request.resource.data) &&
+                       areImmutableFieldsUnchanged([
+                         'createdById', 'createdByName', 'createdByRole',
+                         'createdByEmail', 'createdAt'
+                       ]) &&
+                       (!('updatedById' in request.resource.data) ||
+                        request.resource.data.updatedById == null ||
+                        request.resource.data.updatedById == request.auth.uid);
+
+      // Only Super Admin may permanently delete posts
+      allow delete: if isSuperAdmin();
+    }
+
+    // 6. Leadership & Faculty Team Members
+    match /teamMembers/{memberId} {
+      allow read: if isSuperAdmin() || resource.data.isActive == true;
+
+      allow create: if isSuperAdmin() &&
+                       isValidTeamMember(request.resource.data) &&
+                       request.resource.data.createdAt == request.time;
+
+      allow update: if isSuperAdmin() &&
+                       isValidTeamMember(request.resource.data) &&
+                       areImmutableFieldsUnchanged(['createdAt']);
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // 7. Curated Cybersecurity Learning Resources
+    match /resources/{resourceId} {
+      allow read: if isSuperAdmin() || resource.data.isPublished == true;
+
+      allow create: if isSuperAdmin() &&
+                       isValidResource(request.resource.data) &&
+                       request.resource.data.createdAt == request.time;
+
+      allow update: if isSuperAdmin() &&
+                       isValidResource(request.resource.data) &&
+                       areImmutableFieldsUnchanged(['createdAt']);
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // 8. Media Gallery Showcase
+    match /gallery/{itemId} {
+      allow read: if true;
+
+      allow create: if isSuperAdmin() &&
+                       isValidGalleryItem(request.resource.data) &&
+                       request.resource.data.createdAt == request.time;
+
+      allow update: if isSuperAdmin() &&
+                       isValidGalleryItem(request.resource.data) &&
+                       areImmutableFieldsUnchanged(['createdAt']);
+
+      allow delete: if isSuperAdmin();
+    }
+
+    // 9. Contact Inquiries (Created via rate-limited server API; Super Admin read/triage only)
+    match /contactMessages/{messageId} {
+      allow read: if isSuperAdmin();
+
+      allow create: if false;
+
+      allow update: if isSuperAdmin() &&
+                       isValidContactMessage(request.resource.data) &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                         'isRead', 'respondedAt'
+                       ]) &&
+                       (!('respondedAt' in request.resource.data) ||
+                        request.resource.data.respondedAt == null ||
+                        request.resource.data.respondedAt == request.time ||
+                        ('respondedAt' in resource.data && request.resource.data.respondedAt == resource.data.respondedAt)) &&
+                       areImmutableFieldsUnchanged([
+                         'name', 'email', 'subject', 'message', 'createdAt'
+                       ]);
+
+      allow delete: if false;
+    }
+
+    // 10. Security Audit Logs (Server Admin SDK & Cloud Functions append-only; Super Admin read-only)
+    match /auditLogs/{logId} {
+      allow read: if isSuperAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // ===============================================================
+    // Default Zero-Trust Deny Rule
+    // ===============================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

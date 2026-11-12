@@ -1,11 +1,20 @@
 import { NextResponse } from "next/server";
-import { destroySession } from "@/lib/auth";
+import { getCurrentUser, destroySession } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 
 export async function POST() {
-  try {
-    await destroySession();
-    return NextResponse.json({ success: true, message: "Logged out successfully" });
-  } catch (error) {
-    return NextResponse.json({ error: "Failed to logout" }, { status: 500 });
+  const user = await getCurrentUser();
+  if (user) {
+    await logAudit({
+      action: "USER_LOGOUT",
+      entityType: "User",
+      entityId: user.uid,
+      details: { email: user.email },
+      userId: user.uid,
+      userEmail: user.email,
+    });
   }
+
+  await destroySession(user?.uid);
+  return NextResponse.json({ success: true, message: "Signed out successfully." });
 }

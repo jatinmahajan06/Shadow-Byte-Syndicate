@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { getAdminDb, FieldValue } from "@/firebase/admin";
 import { contactSchema } from "@/lib/validators";
 import { rateLimit } from "@/lib/rate-limit";
 import { sendEmail } from "@/lib/email";
+import { getSiteSettings } from "@/services/siteService";
 
 export async function POST(req: NextRequest) {
   try {
@@ -27,39 +28,46 @@ export async function POST(req: NextRequest) {
     }
 
     const { name, email, subject, message } = parsed.data;
+    const db = getAdminDb();
 
-    const contactRecord = await prisma.contactMessage.create({
-      data: {
-        name,
-        email,
-        subject,
-        message,
-      },
+    const docRef = await db.collection("contactMessages").add({
+      name,
+      email,
+      subject,
+      message,
+      isRead: false,
+      respondedAt: null,
+      createdAt: FieldValue.serverTimestamp(),
     });
 
-    const settings = await prisma.siteSettings.findUnique({
-      where: { id: "default" },
-    });
-    const destinationEmail = settings?.contactEmail || "contact@shadowbyte.club";
+    const settings = await getSiteSettings();
+    const destinationEmail = settings.contactEmail?.trim();
 
-    const emailResult = await sendEmail({
-      to: destinationEmail,
-      subject: `[Contact Form] ${subject} (from ${name})`,
-      html: `
-        <p><strong>Name:</strong> ${name}</p>
-        <p><strong>Email:</strong> ${email}</p>
-        <p><strong>Subject:</strong> ${subject}</p>
-        <p><strong>Message:</strong></p>
-        <p>${message.replace(/\n/g, "<br>")}</p>
-      `,
-      text: `From: ${name} <${email}>\nSubject: ${subject}\n\n${message}`,
-    });
+    const emailResult = destinationEmail
+      ? await sendEmail({
+          to: destinationEmail,
+          subject: `[Contact Form] ${subject} (from ${name})`,
+          html: `
+            <p><strong>Name:</strong> ${name}</p>
+            <p><strong>Email:</strong> ${email}</p>
+            <p><strong>Subject:</strong> ${subject}</p>
+            <p><strong>Message:</strong></p>
+            <p>${message.replace(/\n/g, "<br>")}</p>
+          `,
+          text: `From: ${name} <${email}>\nSubject: ${subject}\n\n${message}`,
+        })
+      : {
+          sent: false,
+          provider: "DISABLED" as const,
+          message:
+            "Submission stored in Cloud Firestore. Administrative notification email is not configured yet.",
+        };
 
     return NextResponse.json({
       success: true,
-      message: "Your message has been received. Our team will review and respond shortly.",
+      message: "Your message has been received and stored in Cloud Firestore. Our team will respond shortly.",
       emailDelivery: emailResult,
-      id: contactRecord.id,
+      id: docRef.id,
     });
   } catch (error) {
     console.error("[Contact API Error]", error);

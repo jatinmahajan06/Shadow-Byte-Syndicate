@@ -1,7 +1,9 @@
 import React from "react";
 import Link from "next/link";
-import { prisma } from "@/lib/prisma";
+import { getResources } from "@/services/siteService";
 import { Terminal, Search, ExternalLink, Bookmark, Code, Shield } from "lucide-react";
+
+export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "Learning Resources",
@@ -16,26 +18,7 @@ export default async function ResourcesPage({
   const search = searchParams.search || "";
   const category = searchParams.category || "ALL";
 
-  const where: any = {
-    isPublished: true,
-  };
-
-  if (category !== "ALL") {
-    where.category = category;
-  }
-
-  if (search) {
-    where.OR = [
-      { title: { contains: search } },
-      { description: { contains: search } },
-      { category: { contains: search } },
-    ];
-  }
-
-  const resources = await prisma.resource.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-  });
+  const resources = await getResources({ onlyPublished: true, category, search });
 
   const categories = [
     "ALL",
@@ -44,6 +27,8 @@ export default async function ResourcesPage({
     "Binary Exploitation",
     "Cryptography",
     "Reverse Engineering",
+    "Defensive Security",
+    "General",
   ];
 
   return (
@@ -106,10 +91,26 @@ export default async function ResourcesPage({
         {resources.length === 0 ? (
           <div className="p-16 text-center cyber-panel rounded-lg border border-brand-border space-y-3">
             <Bookmark className="w-12 h-12 text-brand-gray-dim mx-auto" />
-            <h3 className="text-base font-bold text-white">No Resources Found</h3>
+            <h3 className="text-base font-bold text-white font-mono">
+              {category === "ALL" && !search
+                ? "No resources added yet."
+                : "No Matching Resources Found"}
+            </h3>
             <p className="text-xs text-brand-gray-muted max-w-sm mx-auto">
-              No learning guides match the current filters.
+              {category === "ALL" && !search
+                ? "Verified cybersecurity study links and practice platforms will appear here once published."
+                : "No learning resources match the selected filters."}
             </p>
+            {(category !== "ALL" || search) && (
+              <div className="pt-2">
+                <Link
+                  href="/resources"
+                  className="inline-block px-4 py-1.5 bg-brand-surface hover:bg-brand-red border border-brand-border rounded text-xs font-mono text-white transition-all"
+                >
+                  RESET FILTERS
+                </Link>
+              </div>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -164,3 +165,4 @@ export default async function ResourcesPage({
     </div>
   );
 }
+

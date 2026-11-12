@@ -1,21 +1,25 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import {
   Calendar,
   BookOpen,
   Plus,
-  Edit,
-  Upload,
   CheckCircle2,
   AlertCircle,
   Loader2,
-  Eye,
+  Trash2,
   Archive,
-  FileText,
+  Eye,
 } from "lucide-react";
 import { PUBLISH_STATUS, EVENT_MODES } from "@/lib/constants";
+import { useStorageUpload } from "@/hooks/useStorageUpload";
+import { useAuth } from "@/hooks/useAuth";
+import { deleteStorageObject } from "@/firebase/storage";
+import { isFirebaseConfigured } from "@/firebase/config";
 
 interface EventItem {
   id: string;
@@ -75,8 +79,14 @@ export default function CoordinatorDashboardClient({
   const [editingPost, setEditingPost] = useState<Partial<PostItem> | null>(null);
   const [isNewPost, setIsNewPost] = useState(false);
 
+  // Explicit archive confirmation state for Coordinators
+  const [archiveConfirmEvent, setArchiveConfirmEvent] = useState<EventItem | null>(null);
+
+  const { firebaseUser } = useAuth();
+  const { uploadFile, uploading: storageUploading, progress } = useStorageUpload();
   const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [fallbackUploading, setFallbackUploading] = useState(false);
+  const uploading = storageUploading || fallbackUploading;
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error"; text: string } | null>(
     null
   );
@@ -144,7 +154,14 @@ export default function CoordinatorDashboardClient({
         throw new Error(data.error || "Failed to save post.");
       }
 
-      setStatusMsg({ type: "success", text: isNewPost ? "Post published!" : "Post updated!" });
+      setStatusMsg({
+        type: "success",
+        text: isNewPost
+          ? editingPost.status === "PUBLISHED"
+            ? "Article published!"
+            : "Article saved as draft!"
+          : "Article updated!",
+      });
       setEditingPost(null);
       setIsNewPost(false);
 
@@ -163,37 +180,152 @@ export default function CoordinatorDashboardClient({
     }
   };
 
-  // Image Upload Handler
+  // Coordinator quick status transitions: Publish / Unpublish (Draft) / Archive
+  const handleUpdateEventStatus = async (
+    eventId: string,
+    nextStatus: "PUBLISHED" | "DRAFT" | "ARCHIVED",
+    isRegistrationOpen?: boolean
+  ) => {
+    setLoading(true);
+    setStatusMsg(null);
+    try {
+      const res = await fetch("/api/events", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: eventId, status: nextStatus, isRegistrationOpen }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update event status.");
+
+      setEvents((prev) =>
+        prev.map((evt) =>
+          evt.id === eventId
+            ? {
+                ...evt,
+                status: data.event?.status || nextStatus,
+                isRegistrationOpen:
+                  data.event?.isRegistrationOpen ?? (nextStatus === "PUBLISHED"),
+              }
+            : evt
+        )
+      );
+      setArchiveConfirmEvent(null);
+      const label =
+        nextStatus === "ARCHIVED"
+          ? "archived"
+          : nextStatus === "PUBLISHED"
+          ? "published"
+          : "unpublished (moved to Draft)";
+      setStatusMsg({
+        type: "success",
+        text: `Event "${data.event?.title || eventId}" ${label}.`,
+      });
+      router.refresh();
+    } catch (err: unknown) {
+      setStatusMsg({
+        type: "error",
+        text: err instanceof Error ? err.message : "Failed to update event status",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUpdatePostStatus = async (
+    postId: string,
+    nextStatus: "PUBLISHED" | "DRAFT" | "ARCHIVED"
+  ) => {
+    setLoading(true);
+    setStatusMsg(null);
+    try {
+      const res = await fetch("/api/posts", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: postId, status: nextStatus }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update article status.");
+
+      setPosts((prev) =>
+        prev.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                status: data.post?.status || nextStatus,
+                publishedAt: data.post?.publishedAt ?? post.publishedAt,
+              }
+            : post
+        )
+      );
+      setStatusMsg({
+        type: "success",
+        text: `Article "${data.post?.title || postId}" status set to ${nextStatus}.`,
+      });
+      router.refresh();
+    } catch (err: unknown) {
+      setStatusMsg({
+        type: "error",
+        text: err instanceof Error ? err.message : "Failed to update article status",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Image Upload Handler (Firebase Storage direct upload with progress + server Admin Storage fallback)
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, targetField: string) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setUploading(true);
+    const folder = targetField === "eventBanner" ? "events" : "posts";
+    setStatusMsg(null);
+
     try {
-      const formData = new FormData();
-      formData.append("file", file);
+      let url = "";
 
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
+      if (firebaseUser && isFirebaseConfigured()) {
+        const result = await uploadFile(file, folder);
+        url = result.url;
+      } else {
+        setFallbackUploading(true);
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("folder", folder);
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload failed");
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          body: formData,
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Upload failed");
+        url = data.url;
+      }
 
       if (targetField === "eventBanner" && editingEvent) {
-        setEditingEvent({ ...editingEvent, bannerUrl: data.url });
+        setEditingEvent({ ...editingEvent, bannerUrl: url });
       } else if (targetField === "postCover" && editingPost) {
-        setEditingPost({ ...editingPost, coverImage: data.url });
+        setEditingPost({ ...editingPost, coverImage: url });
       }
-      setStatusMsg({ type: "success", text: "Image successfully uploaded and attached!" });
+      setStatusMsg({ type: "success", text: "Image successfully uploaded to Firebase Storage!" });
     } catch (err: unknown) {
       setStatusMsg({
         type: "error",
         text: err instanceof Error ? err.message : "Upload error",
       });
     } finally {
-      setUploading(false);
+      setFallbackUploading(false);
+    }
+  };
+
+  const handleRemoveUploadedImage = async (targetField: string, url?: string | null) => {
+    if (url) {
+      await deleteStorageObject(url).catch(() => {});
+    }
+    if (targetField === "eventBanner" && editingEvent) {
+      setEditingEvent({ ...editingEvent, bannerUrl: null });
+    } else if (targetField === "postCover" && editingPost) {
+      setEditingPost({ ...editingPost, coverImage: null });
     }
   };
 
@@ -266,7 +398,7 @@ export default function CoordinatorDashboardClient({
                     summary: "",
                     description: "",
                     mode: EVENT_MODES.IN_PERSON,
-                    venue: "Cyber Defense Lab",
+                    venue: "",
                     startDate: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString().slice(0, 16),
                     endDate: new Date(Date.now() + 7 * 24 * 3600 * 1000 + 3 * 3600 * 1000)
                       .toISOString()
@@ -465,22 +597,54 @@ export default function CoordinatorDashboardClient({
                 </div>
 
                 {/* Banner Upload */}
-                <div>
+                <div className="space-y-2">
                   <label className="block text-brand-gray-dim mb-1">
-                    Banner Image (JPEG, PNG, WebP only - max 5MB)
+                    Banner Image (Firebase Storage: JPEG, PNG, WebP only - max 5MB)
                   </label>
-                  <div className="flex items-center space-x-3">
+                  <div className="flex flex-wrap items-center gap-3">
                     <input
                       type="file"
                       accept="image/jpeg,image/png,image/webp"
+                      disabled={uploading}
                       onChange={(e) => handleImageUpload(e, "eventBanner")}
                       className="text-xs text-brand-gray-dim file:mr-2 file:py-1 file:px-3 file:rounded file:border file:border-brand-border file:text-xs file:font-mono file:bg-brand-surface file:text-white"
                     />
-                    {uploading && <Loader2 className="w-4 h-4 animate-spin text-brand-red" />}
+                    {uploading && (
+                      <div className="flex items-center space-x-2">
+                        <Loader2 className="w-4 h-4 animate-spin text-brand-red" />
+                        <span className="text-xs text-brand-gray-text">{progress || 50}%</span>
+                      </div>
+                    )}
                     {editingEvent.bannerUrl && (
-                      <span className="text-emerald-400 text-xs">Banner Attached!</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveUploadedImage("eventBanner", editingEvent.bannerUrl)}
+                        className="inline-flex items-center space-x-1 px-2 py-1 bg-red-950/50 border border-red-800 rounded text-brand-redBright text-xs hover:bg-brand-red hover:text-white"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Remove Banner</span>
+                      </button>
                     )}
                   </div>
+                  {uploading && (
+                    <div className="w-full max-w-sm bg-brand-black rounded-full h-1.5 border border-brand-border overflow-hidden">
+                      <div
+                        className="bg-brand-red h-full transition-all duration-150"
+                        style={{ width: `${Math.max(15, progress)}%` }}
+                      />
+                    </div>
+                  )}
+                  {editingEvent.bannerUrl && (
+                    <div className="relative w-full max-w-md h-36 rounded border border-brand-border overflow-hidden bg-brand-black">
+                      <Image
+                        src={editingEvent.bannerUrl}
+                        alt="Event banner preview"
+                        fill
+                        unoptimized
+                        className="object-cover"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center space-x-3 pt-4 border-t border-brand-border/60">
@@ -490,7 +654,13 @@ export default function CoordinatorDashboardClient({
                     className="px-6 py-2 bg-brand-red hover:bg-brand-redBright text-white font-bold rounded shadow-red-glow flex items-center space-x-2 disabled:opacity-50"
                   >
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                    <span>{isNewEvent ? "SAVE & PUBLISH EVENT" : "UPDATE EVENT"}</span>
+                    <span>
+                      {isNewEvent
+                        ? editingEvent.status === "PUBLISHED"
+                          ? "SAVE & PUBLISH EVENT"
+                          : "SAVE EVENT"
+                        : "UPDATE EVENT"}
+                    </span>
                   </button>
 
                   <button
@@ -522,45 +692,91 @@ export default function CoordinatorDashboardClient({
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-border/40">
-                {events.map((evt) => (
-                  <tr key={evt.id} className="hover:bg-brand-surface/40 transition-colors">
-                    <td className="p-3 font-bold text-white max-w-xs truncate">{evt.title}</td>
-                    <td className="p-3 text-brand-gray-text">{evt.category}</td>
-                    <td className="p-3 text-brand-gray-dim">
-                      {new Date(evt.startDate).toLocaleDateString()}
-                    </td>
-                    <td className="p-3 text-brand-gray-text">
-                      {evt._count.registrations} / {evt.capacity}
-                    </td>
-                    <td className="p-3">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          evt.status === "PUBLISHED"
-                            ? "bg-emerald-950 text-emerald-400 border border-emerald-800"
-                            : evt.status === "DRAFT"
-                            ? "bg-amber-950 text-amber-400 border border-amber-800"
-                            : "bg-brand-surface text-brand-gray-dim"
-                        }`}
-                      >
-                        {evt.status}
-                      </span>
-                    </td>
-                    <td className="p-3 text-right space-x-2">
-                      <button
-                        onClick={() => {
-                          setIsNewEvent(false);
-                          setEditingEvent(evt);
-                        }}
-                        className="px-2.5 py-1 bg-brand-surface hover:bg-brand-card border border-brand-border text-white rounded"
-                      >
-                        Edit
-                      </button>
+                {events.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-6 text-center text-brand-gray-dim">
+                      No events created yet.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  events.map((evt) => (
+                    <tr key={evt.id} className="hover:bg-brand-surface/40 transition-colors">
+                      <td className="p-3 font-bold text-white max-w-xs truncate">{evt.title}</td>
+                      <td className="p-3 text-brand-gray-text">{evt.category}</td>
+                      <td className="p-3 text-brand-gray-dim">
+                        {new Date(evt.startDate).toLocaleDateString()}
+                      </td>
+                      <td className="p-3 text-brand-gray-text">
+                        {evt._count.registrations} / {evt.capacity}
+                      </td>
+                      <td className="p-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                            evt.status === "PUBLISHED"
+                              ? "bg-emerald-950 text-emerald-400 border-emerald-800"
+                              : evt.status === "DRAFT"
+                              ? "bg-amber-950 text-amber-400 border-amber-800"
+                              : "bg-brand-surface text-brand-gray-dim border-brand-border"
+                          }`}
+                        >
+                          {evt.status}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right">
+                        <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                          <Link
+                            href={`/events/${evt.slug}`}
+                            className="inline-flex items-center space-x-1 px-2 py-1 bg-brand-surface hover:bg-brand-card border border-brand-border text-brand-gray-text hover:text-white rounded"
+                          >
+                            <Eye className="w-3 h-3" />
+                            <span>View</span>
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsNewEvent(false);
+                              setEditingEvent(evt);
+                            }}
+                            className="px-2 py-1 bg-brand-surface hover:bg-brand-card border border-brand-border text-white rounded"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            disabled={loading}
+                            onClick={() =>
+                              handleUpdateEventStatus(
+                                evt.id,
+                                evt.status === "PUBLISHED" ? "DRAFT" : "PUBLISHED",
+                                evt.status !== "PUBLISHED"
+                              )
+                            }
+                            className="px-2 py-1 bg-brand-surface hover:bg-brand-card border border-brand-border text-white rounded disabled:opacity-50"
+                          >
+                            {evt.status === "PUBLISHED" ? "Unpublish" : "Publish"}
+                          </button>
+                          {evt.status !== "ARCHIVED" && (
+                            <button
+                              type="button"
+                              disabled={loading}
+                              onClick={() => setArchiveConfirmEvent(evt)}
+                              className="inline-flex items-center space-x-1 px-2 py-1 bg-amber-950/40 hover:bg-amber-900/60 border border-amber-800/70 text-amber-300 rounded disabled:opacity-50"
+                            >
+                              <Archive className="w-3 h-3" />
+                              <span>Archive</span>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
+          <p className="text-[11px] font-mono text-brand-gray-dim">
+            Note: Coordinators can publish, unpublish, or archive events while preserving registration history. Permanent deletion is restricted to Super Administrators{currentUserRole === "SUPER_ADMIN" ? " via the Admin Control Panel" : ""}.
+          </p>
         </div>
       )}
 
@@ -581,7 +797,7 @@ export default function CoordinatorDashboardClient({
                     excerpt: "",
                     content: "",
                     category: "Security Research",
-                    tags: "cybersecurity, research",
+                    tags: "",
                     status: PUBLISH_STATUS.DRAFT,
                   });
                 }}
@@ -700,20 +916,54 @@ export default function CoordinatorDashboardClient({
                 </div>
 
                 {/* Cover Image Upload */}
-                <div>
-                  <label className="block text-brand-gray-dim mb-1">Cover Image (Optional)</label>
-                  <div className="flex items-center space-x-3">
+                <div className="space-y-2">
+                  <label className="block text-brand-gray-dim mb-1">
+                    Cover Image (Optional - Firebase Storage: JPEG, PNG, WebP max 5MB)
+                  </label>
+                  <div className="flex flex-wrap items-center gap-3">
                     <input
                       type="file"
                       accept="image/jpeg,image/png,image/webp"
+                      disabled={uploading}
                       onChange={(e) => handleImageUpload(e, "postCover")}
                       className="text-xs text-brand-gray-dim file:mr-2 file:py-1 file:px-3 file:rounded file:border file:border-brand-border file:text-xs file:font-mono file:bg-brand-surface file:text-white"
                     />
-                    {uploading && <Loader2 className="w-4 h-4 animate-spin text-brand-red" />}
+                    {uploading && (
+                      <div className="flex items-center space-x-2">
+                        <Loader2 className="w-4 h-4 animate-spin text-brand-red" />
+                        <span className="text-xs text-brand-gray-text">{progress || 50}%</span>
+                      </div>
+                    )}
                     {editingPost.coverImage && (
-                      <span className="text-emerald-400 text-xs">Image Attached!</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveUploadedImage("postCover", editingPost.coverImage)}
+                        className="inline-flex items-center space-x-1 px-2 py-1 bg-red-950/50 border border-red-800 rounded text-brand-redBright text-xs hover:bg-brand-red hover:text-white"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Remove Cover</span>
+                      </button>
                     )}
                   </div>
+                  {uploading && (
+                    <div className="w-full max-w-sm bg-brand-black rounded-full h-1.5 border border-brand-border overflow-hidden">
+                      <div
+                        className="bg-brand-red h-full transition-all duration-150"
+                        style={{ width: `${Math.max(15, progress)}%` }}
+                      />
+                    </div>
+                  )}
+                  {editingPost.coverImage && (
+                    <div className="relative w-full max-w-md h-36 rounded border border-brand-border overflow-hidden bg-brand-black">
+                      <Image
+                        src={editingPost.coverImage}
+                        alt="Article cover preview"
+                        fill
+                        unoptimized
+                        className="object-cover"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center space-x-3 pt-4 border-t border-brand-border/60">
@@ -723,7 +973,13 @@ export default function CoordinatorDashboardClient({
                     className="px-6 py-2 bg-brand-red hover:bg-brand-redBright text-white font-bold rounded shadow-red-glow flex items-center space-x-2 disabled:opacity-50"
                   >
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                    <span>{isNewPost ? "PUBLISH ARTICLE" : "UPDATE ARTICLE"}</span>
+                    <span>
+                      {isNewPost
+                        ? editingPost.status === "PUBLISHED"
+                          ? "PUBLISH ARTICLE"
+                          : "SAVE DRAFT ARTICLE"
+                        : "UPDATE ARTICLE"}
+                    </span>
                   </button>
 
                   <button
@@ -754,40 +1010,125 @@ export default function CoordinatorDashboardClient({
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-border/40">
-                {posts.map((post) => (
-                  <tr key={post.id} className="hover:bg-brand-surface/40 transition-colors">
-                    <td className="p-3 font-bold text-white max-w-xs truncate">{post.title}</td>
-                    <td className="p-3 text-brand-gray-text">{post.category}</td>
-                    <td className="p-3 text-brand-gray-dim">{post.createdBy.name}</td>
-                    <td className="p-3">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          post.status === "PUBLISHED"
-                            ? "bg-emerald-950 text-emerald-400 border border-emerald-800"
-                            : "bg-amber-950 text-amber-400 border border-amber-800"
-                        }`}
-                      >
-                        {post.status}
-                      </span>
-                    </td>
-                    <td className="p-3 text-right space-x-2">
-                      <button
-                        onClick={() => {
-                          setIsNewPost(false);
-                          setEditingPost(post);
-                        }}
-                        className="px-2.5 py-1 bg-brand-surface hover:bg-brand-card border border-brand-border text-white rounded"
-                      >
-                        Edit
-                      </button>
+                {posts.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-6 text-center text-brand-gray-dim">
+                      No articles authored yet.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  posts.map((post) => (
+                    <tr key={post.id} className="hover:bg-brand-surface/40 transition-colors">
+                      <td className="p-3 font-bold text-white max-w-xs truncate">{post.title}</td>
+                      <td className="p-3 text-brand-gray-text">{post.category}</td>
+                      <td className="p-3 text-brand-gray-dim">{post.createdBy?.name || "Club Author"}</td>
+                      <td className="p-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                            post.status === "PUBLISHED"
+                              ? "bg-emerald-950 text-emerald-400 border-emerald-800"
+                              : post.status === "DRAFT"
+                              ? "bg-amber-950 text-amber-400 border-amber-800"
+                              : "bg-brand-surface text-brand-gray-dim border-brand-border"
+                          }`}
+                        >
+                          {post.status}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right">
+                        <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                          <Link
+                            href={`/posts/${post.slug}`}
+                            className="inline-flex items-center space-x-1 px-2 py-1 bg-brand-surface hover:bg-brand-card border border-brand-border text-brand-gray-text hover:text-white rounded"
+                          >
+                            <Eye className="w-3 h-3" />
+                            <span>View</span>
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsNewPost(false);
+                              setEditingPost(post);
+                            }}
+                            className="px-2 py-1 bg-brand-surface hover:bg-brand-card border border-brand-border text-white rounded"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            disabled={loading}
+                            onClick={() =>
+                              handleUpdatePostStatus(
+                                post.id,
+                                post.status === "PUBLISHED" ? "DRAFT" : "PUBLISHED"
+                              )
+                            }
+                            className="px-2 py-1 bg-brand-surface hover:bg-brand-card border border-brand-border text-white rounded disabled:opacity-50"
+                          >
+                            {post.status === "PUBLISHED" ? "Unpublish" : "Publish"}
+                          </button>
+                          {post.status !== "ARCHIVED" && (
+                            <button
+                              type="button"
+                              disabled={loading}
+                              onClick={() => handleUpdatePostStatus(post.id, "ARCHIVED")}
+                              className="px-2 py-1 bg-amber-950/40 hover:bg-amber-900/60 border border-amber-800/70 text-amber-300 rounded disabled:opacity-50"
+                            >
+                              Archive
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Coordinator Archive Confirmation Modal */}
+      {archiveConfirmEvent && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="coordinator-archive-modal-title"
+        >
+          <div className="w-full max-w-md cyber-panel rounded-lg border border-amber-800/80 bg-brand-surface p-6 space-y-4 shadow-2xl">
+            <h3 id="coordinator-archive-modal-title" className="text-base font-bold text-white font-mono">
+              Archive Event?
+            </h3>
+            <p className="text-xs text-brand-gray-text font-sans leading-relaxed">
+              Archiving <strong className="text-white">{archiveConfirmEvent.title}</strong> removes it from public event listings and closes registrations while{" "}
+              <strong className="text-white">
+                preserving all {archiveConfirmEvent._count.registrations} existing student registration record(s)
+              </strong>
+              . Permanent deletion is reserved for Super Administrators.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-brand-border/60 text-xs font-mono">
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() => setArchiveConfirmEvent(null)}
+                className="px-3 py-1.5 bg-brand-black hover:bg-brand-card border border-brand-border text-brand-gray-dim hover:text-white rounded"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() => handleUpdateEventStatus(archiveConfirmEvent.id, "ARCHIVED", false)}
+                className="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-black font-bold rounded"
+              >
+                CONFIRM ARCHIVE
+              </button>
+            </div>
           </div>
         </div>
       )}
     </div>
   );
 }
+

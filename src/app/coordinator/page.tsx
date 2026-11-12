@@ -1,9 +1,12 @@
 import React from "react";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
-import { ROLES, PUBLISH_STATUS } from "@/lib/constants";
+import { ROLES } from "@/lib/constants";
+import { getAllEvents } from "@/services/eventService";
+import { getAllPosts } from "@/services/postService";
 import CoordinatorDashboardClient from "@/components/dashboard/CoordinatorDashboardClient";
+
+export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "Coordinator Operations Hub",
@@ -23,19 +26,8 @@ export default async function CoordinatorPage() {
   }
 
   const [events, posts] = await Promise.all([
-    prisma.event.findMany({
-      orderBy: { createdAt: "desc" },
-      include: {
-        createdBy: { select: { name: true, email: true } },
-        _count: { select: { registrations: true } },
-      },
-    }),
-    prisma.post.findMany({
-      orderBy: { createdAt: "desc" },
-      include: {
-        createdBy: { select: { name: true, email: true } },
-      },
-    }),
+    getAllEvents(),
+    getAllPosts(),
   ]);
 
   return (
@@ -82,3 +74,4 @@ export default async function CoordinatorPage() {
     </div>
   );
 }
+

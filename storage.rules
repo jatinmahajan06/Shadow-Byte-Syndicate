@@ -1,0 +1,77 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isActiveAccount() {
+      return isAuthenticated() && request.auth.token.isActive != false;
+    }
+
+    function isSuperAdmin() {
+      return isActiveAccount() && request.auth.token.role == 'SUPER_ADMIN';
+    }
+
+    function isStaff() {
+      return isActiveAccount() && (
+        request.auth.token.role == 'SUPER_ADMIN' ||
+        request.auth.token.role == 'COORDINATOR'
+      );
+    }
+
+    function isValidImage() {
+      return request.resource != null &&
+        request.resource.size <= 5 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+
+    // Event banners uploaded by Coordinators or Super Admin into their UID folder
+    match /uploads/events/{uid}/{fileName} {
+      allow read: if true;
+      allow create, update: if isStaff() && request.auth.uid == uid && isValidImage();
+      allow delete: if isSuperAdmin() || (isStaff() && request.auth.uid == uid);
+    }
+
+    // Post covers uploaded by Coordinators or Super Admin into their UID folder
+    match /uploads/posts/{uid}/{fileName} {
+      allow read: if true;
+      allow create, update: if isStaff() && request.auth.uid == uid && isValidImage();
+      allow delete: if isSuperAdmin() || (isStaff() && request.auth.uid == uid);
+    }
+
+    // User profile avatars - strict UID isolation
+    match /uploads/avatars/{uid}/{fileName} {
+      allow read: if isAuthenticated();
+      allow create, update: if isActiveAccount() && request.auth.uid == uid && isValidImage();
+      allow delete: if isSuperAdmin() || (isActiveAccount() && request.auth.uid == uid);
+    }
+
+    // Team, Gallery, and Branding images - Super Admin exclusive
+    match /uploads/team/{fileName} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() && isValidImage();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /uploads/gallery/{fileName} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() && isValidImage();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /uploads/branding/{fileName} {
+      allow read: if true;
+      allow create, update: if isSuperAdmin() && isValidImage();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Default deny for everything else
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
+

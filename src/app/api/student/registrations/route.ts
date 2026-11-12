@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { ROLES } from "@/lib/constants";
+import { getStudentRegistrations } from "@/services/eventService";
 
 export async function GET() {
   try {
@@ -17,30 +17,8 @@ export async function GET() {
       );
     }
 
-    // STRICT STUDENT ISOLATION: Query ONLY with studentId === user.id
-    const registrations = await prisma.eventRegistration.findMany({
-      where: {
-        studentId: user.id,
-      },
-      include: {
-        event: {
-          select: {
-            id: true,
-            slug: true,
-            title: true,
-            summary: true,
-            bannerUrl: true,
-            mode: true,
-            venue: true,
-            startDate: true,
-            endDate: true,
-            status: true,
-            category: true,
-          },
-        },
-      },
-      orderBy: { registeredAt: "desc" },
-    });
+    // STRICT STUDENT ISOLATION: Query ONLY with studentId === user.uid
+    const registrations = await getStudentRegistrations(user.uid);
 
     return NextResponse.json({ success: true, registrations });
   } catch (error) {

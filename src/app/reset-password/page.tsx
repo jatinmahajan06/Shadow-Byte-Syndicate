@@ -1,24 +1,51 @@
 "use client";
 
-import React, { useState, Suspense } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { verifyPasswordResetCode, confirmPasswordReset } from "firebase/auth";
 import { Lock, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { getFirebaseClient } from "@/firebase/config";
+import { formatFirebaseAuthError } from "@/firebase/auth";
 
 function ResetPasswordContent() {
   const searchParams = useSearchParams();
-  const token = searchParams.get("token") || "";
+  const oobCode = searchParams.get("oobCode") || searchParams.get("token") || "";
 
+  const [verifiedEmail, setVerifiedEmail] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(Boolean(oobCode));
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!oobCode) {
+      setVerifying(false);
+      return;
+    }
+
+    try {
+      const { auth } = getFirebaseClient();
+      verifyPasswordResetCode(auth, oobCode)
+        .then((email) => {
+          setVerifiedEmail(email);
+        })
+        .catch((err) => {
+          setError(formatFirebaseAuthError(err, "Invalid or expired password reset link."));
+        })
+        .finally(() => setVerifying(false));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Firebase Auth configuration error.");
+      setVerifying(false);
+    }
+  }, [oobCode]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token) {
-      setError("Missing reset authorization token.");
+    if (!oobCode) {
+      setError("Missing Firebase password reset code.");
       return;
     }
 
@@ -31,39 +58,39 @@ function ResetPasswordContent() {
     setError(null);
 
     try {
-      const res = await fetch("/api/auth/reset-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, newPassword: password }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to reset password.");
-      }
-
+      const { auth } = getFirebaseClient();
+      await confirmPasswordReset(auth, oobCode, password);
       setSuccess(true);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Reset error occurred");
+      setError(formatFirebaseAuthError(err, "Failed to reset password."));
     } finally {
       setLoading(false);
     }
   };
 
-  if (!token) {
+  if (verifying) {
+    return (
+      <div className="min-h-[70vh] flex items-center justify-center font-mono text-xs text-brand-red">
+        <Loader2 className="w-6 h-6 animate-spin mr-2" />
+        <span>VERIFYING FIREBASE RESET CODE...</span>
+      </div>
+    );
+  }
+
+  if (!oobCode || (!verifiedEmail && error && !success)) {
     return (
       <div className="min-h-[70vh] flex items-center justify-center p-4">
         <div className="max-w-md w-full cyber-panel p-8 rounded-lg border border-brand-red text-center space-y-4">
           <AlertCircle className="w-10 h-10 text-brand-red mx-auto" />
           <h2 className="text-lg font-bold text-white font-mono">Invalid Reset Link</h2>
           <p className="text-xs text-brand-gray-muted">
-            The password reset authorization token is missing or has expired.
+            {error || "The password reset authorization code is missing or has expired."}
           </p>
           <Link
             href="/forgot-password"
             className="inline-block px-4 py-2 bg-brand-surface hover:bg-brand-red text-white text-xs font-mono rounded"
           >
-            Request New Reset Token
+            Request New Reset Link
           </Link>
         </div>
       </div>
@@ -81,7 +108,9 @@ function ResetPasswordContent() {
         <div>
           <h2 className="text-xl font-bold text-white tracking-tight">Set New Password</h2>
           <p className="text-xs text-brand-gray-muted mt-1">
-            Enter a new secure password of at least 8 characters.
+            {verifiedEmail
+              ? `Resetting credentials for ${verifiedEmail}.`
+              : "Enter a new secure password of at least 8 characters."}
           </p>
         </div>
 
@@ -92,7 +121,7 @@ function ResetPasswordContent() {
               <span>Password successfully updated!</span>
             </div>
             <p className="text-brand-gray-text text-[11px]">
-              All prior sessions have been invalidated. You may now log in with your new password.
+              Your Firebase credentials have been updated. You may now log in with your new password.
             </p>
             <div className="pt-2">
               <Link

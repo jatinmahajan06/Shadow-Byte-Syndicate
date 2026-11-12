@@ -1,8 +1,9 @@
 import React from "react";
 import Link from "next/link";
-import { prisma } from "@/lib/prisma";
-import { PUBLISH_STATUS } from "@/lib/constants";
+import { getPublishedPosts } from "@/services/postService";
 import { BookOpen, Search, Calendar, User, ArrowRight, Tag } from "lucide-react";
+
+export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "Knowledge Hub & Research",
@@ -17,30 +18,7 @@ export default async function PostsPage({
   const search = searchParams.search || "";
   const category = searchParams.category || "ALL";
 
-  const where: any = {
-    status: PUBLISH_STATUS.PUBLISHED,
-  };
-
-  if (category !== "ALL") {
-    where.category = category;
-  }
-
-  if (search) {
-    where.OR = [
-      { title: { contains: search } },
-      { excerpt: { contains: search } },
-      { content: { contains: search } },
-      { tags: { contains: search } },
-    ];
-  }
-
-  const posts = await prisma.post.findMany({
-    where,
-    orderBy: { publishedAt: "desc" },
-    include: {
-      createdBy: { select: { name: true, role: true } },
-    },
-  });
+  const posts = await getPublishedPosts({ category, search });
 
   const categories = [
     "ALL",
@@ -114,10 +92,26 @@ export default async function PostsPage({
         {posts.length === 0 ? (
           <div className="p-16 text-center cyber-panel rounded-lg border border-brand-border space-y-3">
             <BookOpen className="w-12 h-12 text-brand-gray-dim mx-auto" />
-            <h3 className="text-base font-bold text-white">No Articles Found</h3>
+            <h3 className="text-base font-bold text-white font-mono">
+              {category === "ALL" && !search
+                ? "No articles published yet."
+                : "No Matching Articles Found"}
+            </h3>
             <p className="text-xs text-brand-gray-muted max-w-sm mx-auto">
-              No published articles match the selected category or search query.
+              {category === "ALL" && !search
+                ? "Published cybersecurity research write-ups and technical disclosures will appear here."
+                : "No published articles match the selected category or search query."}
             </p>
+            {(category !== "ALL" || search) && (
+              <div className="pt-2">
+                <Link
+                  href="/posts"
+                  className="inline-block px-4 py-1.5 bg-brand-surface hover:bg-brand-red border border-brand-border rounded text-xs font-mono text-white transition-all"
+                >
+                  RESET FILTERS
+                </Link>
+              </div>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -168,3 +162,4 @@ export default async function PostsPage({
     </div>
   );
 }
+

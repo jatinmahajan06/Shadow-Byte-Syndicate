@@ -1,5 +1,5 @@
 # dependencies
-/node_modules
+node_modules/
 /.pnp
 .pnp.js
 
@@ -12,19 +12,39 @@
 
 # production
 /build
+/dist
 
 # misc
 .DS_Store
-*.pem
+Thumbs.db
 
 # debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
-# local env files
-.env*.local
+# local env files (never commit real secrets; keep .env.example)
 .env
+.env.local
+.env.*.local
+.env.*
+!.env.example
+
+# Firebase private credentials & secrets
+*firebase-adminsdk*.json
+*service-account*.json
+*serviceAccount*.json
+serviceAccountKey*.json
+google-services.json
+GoogleService-Info.plist
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+secrets/
+.secrets/
 
 # vercel
 .vercel
@@ -33,8 +53,19 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# SQLite local databases
-prisma/*.db
-prisma/*.db-journal
-dev.db
-dev.db-journal
+# Firebase Emulator logs & cache
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+pubsub-debug.log*
+database-debug.log*
+.firebase/
+functions/lib/
+functions/dist/
+/backups/
+
+# local photo-mapping review helper files
+team-photo-identification.md
+team-photo-review/
+
+

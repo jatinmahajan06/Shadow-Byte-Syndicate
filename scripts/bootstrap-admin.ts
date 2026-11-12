@@ -1,12 +1,19 @@
-import { prisma } from "../src/lib/prisma";
-import { hashPassword } from "../src/lib/auth";
+import "dotenv/config";
+import {
+  getAdminAuth,
+  getAdminDb,
+  FieldValue,
+} from "../src/firebase/admin";
 import { ROLES } from "../src/lib/constants";
-import crypto from "crypto";
 
 async function bootstrapAdmin() {
-  const email = process.env.BOOTSTRAP_ADMIN_EMAIL || process.argv[2];
+  const email = (process.env.BOOTSTRAP_ADMIN_EMAIL || process.argv[2] || "").trim().toLowerCase();
   const password = process.env.BOOTSTRAP_ADMIN_PASSWORD || process.argv[3];
-  const name = process.env.BOOTSTRAP_ADMIN_NAME || process.argv[4] || "Initial Super Admin";
+  const name = (
+    process.env.BOOTSTRAP_ADMIN_NAME ||
+    process.argv[4] ||
+    "Initial Super Admin"
+  ).trim();
 
   if (!email || !password) {
     console.error(
@@ -22,66 +29,100 @@ async function bootstrapAdmin() {
     process.exit(1);
   }
 
-  const existing = await prisma.user.findUnique({
-    where: { email: email.toLowerCase() },
+  const adminAuth = getAdminAuth();
+  const db = getAdminDb();
+
+  let uid: string;
+
+  try {
+    const existingAuth = await adminAuth.getUserByEmail(email);
+    uid = existingAuth.uid;
+    console.log(`[BOOTSTRAP] Found existing Firebase Auth user (${uid}). Promoting to SUPER_ADMIN...`);
+    await adminAuth.updateUser(uid, {
+      password,
+      displayName: name,
+      disabled: false,
+      emailVerified: true,
+    });
+  } catch (err: unknown) {
+    const code = (err as { code?: string })?.code;
+    if (code === "auth/user-not-found") {
+      console.log(`[BOOTSTRAP] Creating new Firebase Auth SUPER_ADMIN user for ${email}...`);
+      const created = await adminAuth.createUser({
+        email,
+        password,
+        displayName: name,
+        disabled: false,
+        emailVerified: true,
+      });
+      uid = created.uid;
+    } else {
+      throw err;
+    }
+  }
+
+  await adminAuth.setCustomUserClaims(uid, {
+    role: ROLES.SUPER_ADMIN,
+    isActive: true,
   });
 
-  const passwordHash = await hashPassword(password);
-
-  if (existing) {
-    console.log(`[BOOTSTRAP] Updating existing account ${email} to SUPER_ADMIN...`);
-    const updated = await prisma.user.update({
-      where: { id: existing.id },
-      data: {
-        role: ROLES.SUPER_ADMIN,
-        isActive: true,
-        passwordHash,
-      },
-    });
-    console.log(`[SUCCESS] Account ${updated.email} is now an active SUPER_ADMIN.`);
-  } else {
-    console.log(`[BOOTSTRAP] Creating new initial SUPER_ADMIN account: ${email}...`);
-    const created = await prisma.user.create({
-      data: {
-        email: email.toLowerCase(),
-        passwordHash,
+  await db
+    .collection("users")
+    .doc(uid)
+    .set(
+      {
+        uid,
+        email,
         name,
         role: ROLES.SUPER_ADMIN,
         isActive: true,
+        studentId: null,
+        department: "Cybersecurity Administration",
+        phone: null,
+        photoURL: null,
+        preferences: {
+          notifications: true,
+          theme: "dark",
+        },
+        registrationCount: 0,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       },
-    });
-    console.log(`[SUCCESS] Super Admin account created: ${created.email}`);
-  }
+      { merge: true }
+    );
 
-  // Ensure default site settings exist
-  await prisma.siteSettings.upsert({
-    where: { id: "default" },
-    create: {
+  // Ensure default site settings exist in Cloud Firestore (no placeholder contacts/handles)
+  const settingsRef = db.collection("siteSettings").doc("default");
+  const settingsSnap = await settingsRef.get();
+  if (!settingsSnap.exists) {
+    await settingsRef.set({
       id: "default",
       clubName: "SHADOW BYTE SYNDICATE",
       supportingLine: "HACK • RESEARCH • INNOVATE • SECURE",
       mainTagline: "WE DON’T FOLLOW THE SYSTEM, WE SECURE IT.",
       secondaryPhrase: "BEYOND FIREWALLS",
-      contactEmail: "contact@shadowbyte.club",
+      contactEmail: "",
+      headquarters: "",
       timezone: process.env.NEXT_PUBLIC_TIMEZONE || "Asia/Kolkata",
+      instagramHandle: "",
+      youtubeChannel: "",
+      discordInvite: "",
       bannerUrl: "/assets/brand/banner.jpeg",
       shieldLogoUrl: "/assets/brand/shield-emblem.png",
       aboutSummary:
-        "Shadow Byte Syndicate is a premier collegiate cybersecurity defense and ethical hacking research collective.",
+        "Shadow Byte Syndicate is an elite student-led collegiate cybersecurity defense collective dedicated to hands-on security research, CTF competitions, threat intelligence, and digital defense.",
       ethicsStatement:
         "We are strictly committed to ethical cybersecurity, responsible vulnerability disclosure, and defensive system hardening.",
-    },
-    update: {},
-  });
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    console.log("[BOOTSTRAP] Default Firestore siteSettings created.");
+  }
 
-  console.log("[BOOTSTRAP] Default site settings ensured.");
+  console.log(`[SUCCESS] Account ${email} (UID: ${uid}) is now an active SUPER_ADMIN in Firebase Auth & Firestore.`);
+  process.exit(0);
 }
 
-bootstrapAdmin()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+bootstrapAdmin().catch((err) => {
+  console.error("[BOOTSTRAP FAILED]", err);
+  process.exit(1);
+});

@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { getAdminDb, FieldValue } from "@/firebase/admin";
 import { getCurrentUser } from "@/lib/auth";
 import { teamMemberSchema } from "@/lib/validators";
 import { ROLES } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
+import { getTeamMembers } from "@/services/siteService";
+import { toSerializable } from "@/services/firestoreConverters";
 
 export async function GET() {
   try {
-    const members = await prisma.teamMember.findMany({
-      orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
-    });
+    const user = await getCurrentUser();
+    if (!user || user.role !== ROLES.SUPER_ADMIN) {
+      return NextResponse.json({ error: "Forbidden: Super Admin only" }, { status: 403 });
+    }
+
+    const members = await getTeamMembers();
     return NextResponse.json({ success: true, members });
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: "Failed to fetch team members" }, { status: 500 });
   }
 }
@@ -32,20 +37,32 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const member = await prisma.teamMember.create({
-      data: parsed.data,
+    const db = getAdminDb();
+    const docRef = await db.collection("teamMembers").add({
+      ...parsed.data,
+      photoUrl: parsed.data.photoUrl || null,
+      email: parsed.data.email || null,
+      githubUrl: parsed.data.githubUrl || null,
+      linkedinUrl: parsed.data.linkedinUrl || null,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
     await logAudit({
       action: "TEAM_MEMBER_CREATE",
       entityType: "TeamMember",
-      entityId: member.id,
-      details: { name: member.name, role: member.role },
-      userId: user.id,
+      entityId: docRef.id,
+      details: { name: parsed.data.name, role: parsed.data.role },
+      userId: user.uid,
+      userEmail: user.email,
     });
 
-    return NextResponse.json({ success: true, member });
-  } catch (error) {
+    const snap = await docRef.get();
+    return NextResponse.json({
+      success: true,
+      member: toSerializable({ id: docRef.id, ...snap.data() }),
+    });
+  } catch {
     return NextResponse.json({ error: "Failed to create team member" }, { status: 500 });
   }
 }
@@ -69,13 +86,23 @@ export async function PUT(req: NextRequest) {
       );
     }
 
-    const updated = await prisma.teamMember.update({
-      where: { id },
-      data: parsed.data,
+    const db = getAdminDb();
+    const docRef = db.collection("teamMembers").doc(id);
+    await docRef.update({
+      ...parsed.data,
+      photoUrl: parsed.data.photoUrl || null,
+      email: parsed.data.email || null,
+      githubUrl: parsed.data.githubUrl || null,
+      linkedinUrl: parsed.data.linkedinUrl || null,
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
-    return NextResponse.json({ success: true, member: updated });
-  } catch (error) {
+    const snap = await docRef.get();
+    return NextResponse.json({
+      success: true,
+      member: toSerializable({ id, ...snap.data() }),
+    });
+  } catch {
     return NextResponse.json({ error: "Failed to update team member" }, { status: 500 });
   }
 }
@@ -91,17 +118,19 @@ export async function DELETE(req: NextRequest) {
     const id = searchParams.get("id");
     if (!id) return NextResponse.json({ error: "ID required" }, { status: 400 });
 
-    await prisma.teamMember.delete({ where: { id } });
+    const db = getAdminDb();
+    await db.collection("teamMembers").doc(id).delete();
 
     await logAudit({
       action: "TEAM_MEMBER_DELETE",
       entityType: "TeamMember",
       entityId: id,
-      userId: user.id,
+      userId: user.uid,
+      userEmail: user.email,
     });
 
-    return NextResponse.json({ success: true, message: "Member removed" });
-  } catch (error) {
+    return NextResponse.json({ success: true, message: "Team member removed" });
+  } catch {
     return NextResponse.json({ error: "Failed to delete team member" }, { status: 500 });
   }
 }

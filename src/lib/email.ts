@@ -65,3 +65,4 @@ export async function sendEmail({
       "SMTP credentials not configured. Email logged to server console (Development Mode).",
   };
 }
+

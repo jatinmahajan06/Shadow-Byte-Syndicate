@@ -1,18 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { hashPassword, createSession } from "@/lib/auth";
-import { studentRegisterSchema } from "@/lib/validators";
+import { getAdminAuth, getAdminDb, FieldValue } from "@/firebase/admin";
+import { createFirebaseSessionCookie } from "@/lib/auth";
+import { firebaseStudentRegisterSchema } from "@/lib/validators";
 import { rateLimit } from "@/lib/rate-limit";
-import { logAudit } from "@/lib/audit";
+import { logAudit, recordUserActivity } from "@/lib/audit";
 import { ROLES } from "@/lib/constants";
 
 export async function POST(req: NextRequest) {
   try {
     const ip = req.headers.get("x-forwarded-for") || "127.0.0.1";
-    const userAgent = req.headers.get("user-agent") || undefined;
 
-    // Rate limit: 3 registrations per IP per 5 minutes
-    const limiter = rateLimit(`register:${ip}`, 3, 300);
+    const limiter = rateLimit(`register:${ip}`, 5, 300);
     if (!limiter.success) {
       return NextResponse.json(
         {
@@ -23,7 +21,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const parsed = studentRegisterSchema.safeParse(body);
+    const parsed = firebaseStudentRegisterSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
         { error: "Validation error: " + parsed.error.errors[0]?.message },
@@ -31,45 +29,72 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { name, email, password, studentId, department, phone } = parsed.data;
+    const { idToken, name, studentId, department, phone } = parsed.data;
+    const adminAuth = getAdminAuth();
+    const db = getAdminDb();
 
-    // Check if email already taken
-    const existingUser = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
-    });
+    // Verify Firebase ID token server-side
+    const decoded = await adminAuth.verifyIdToken(idToken, true);
+    const uid = decoded.uid;
+    const email = (decoded.email || "").toLowerCase();
 
-    if (existingUser) {
+    if (!email) {
       return NextResponse.json(
-        { error: "An account with this email address already exists. Please log in." },
+        { error: "Verified email address is required." },
+        { status: 400 }
+      );
+    }
+
+    const userRef = db.collection("users").doc(uid);
+    const existingSnap = await userRef.get();
+
+    if (existingSnap.exists) {
+      return NextResponse.json(
+        { error: "An account profile already exists for this identity. Please log in." },
         { status: 409 }
       );
     }
 
-    const passwordHash = await hashPassword(password);
-
-    // SECURITY ENFORCEMENT: Explicitly force STUDENT role. No client can escalate role during registration.
-    const newUser = await prisma.user.create({
-      data: {
-        name,
-        email: email.toLowerCase(),
-        passwordHash,
-        role: ROLES.STUDENT,
-        isActive: true,
-        studentId,
-        department,
-        phone: phone || null,
-      },
+    // SECURITY ENFORCEMENT: Public registration strictly enforces ROLES.STUDENT
+    await adminAuth.setCustomUserClaims(uid, {
+      role: ROLES.STUDENT,
+      isActive: true,
     });
 
-    // Create session for immediate student onboarding
-    await createSession(newUser.id, newUser.role, ip, userAgent);
+    await userRef.set({
+      uid,
+      email,
+      name: name.trim(),
+      role: ROLES.STUDENT,
+      isActive: true,
+      studentId: studentId.trim(),
+      department: department.trim(),
+      phone: phone?.trim() || null,
+      photoURL: decoded.picture || null,
+      preferences: {
+        notifications: true,
+        theme: "dark",
+      },
+      registrationCount: 0,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    await createFirebaseSessionCookie(idToken);
+
+    await recordUserActivity(
+      uid,
+      "ACCOUNT_CREATED",
+      "Collegiate student account provisioned with Shadow Byte Syndicate."
+    );
 
     await logAudit({
       action: "STUDENT_SIGNUP",
       entityType: "User",
-      entityId: newUser.id,
-      details: { email: newUser.email, studentId: newUser.studentId },
-      userId: newUser.id,
+      entityId: uid,
+      details: { email, studentId, provider: "password" },
+      userId: uid,
+      userEmail: email,
       ipAddress: ip,
     });
 
@@ -77,15 +102,19 @@ export async function POST(req: NextRequest) {
       success: true,
       message: "Student account created successfully.",
       user: {
-        id: newUser.id,
-        email: newUser.email,
-        name: newUser.name,
-        role: newUser.role,
+        id: uid,
+        uid,
+        email,
+        name: name.trim(),
+        role: ROLES.STUDENT,
+        isActive: true,
+        studentId: studentId.trim(),
+        department: department.trim(),
       },
       redirectUrl: "/student",
     });
-  } catch (error: unknown) {
-    console.error("[Register API Error]", error);
+  } catch (error) {
+    console.error("[Firebase Student Register API Error]", error);
     return NextResponse.json(
       { error: "Failed to create student account. Please try again." },
       { status: 500 }

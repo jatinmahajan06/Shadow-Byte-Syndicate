@@ -1,10 +1,34 @@
 import { z } from "zod";
-import { ROLES, PUBLISH_STATUS, EVENT_MODES, REGISTRATION_STATUS } from "./constants";
+import { ROLES, PUBLISH_STATUS, EVENT_MODES } from "./constants";
+
+const httpUrlSchema = z
+  .string()
+  .trim()
+  .url("Must be a valid URL")
+  .refine((u) => /^https?:\/\//i.test(u), "URL must start with http:// or https://");
 
 export const loginSchema = z.object({
   email: z.string().trim().email("Invalid email address"),
   password: z.string().min(6, "Password must be at least 6 characters"),
   expectedRole: z.enum([ROLES.SUPER_ADMIN, ROLES.COORDINATOR, ROLES.STUDENT]),
+});
+
+export const firebaseLoginSchema = z.object({
+  idToken: z.string().min(20, "Invalid authentication token"),
+  expectedRole: z.enum([ROLES.SUPER_ADMIN, ROLES.COORDINATOR, ROLES.STUDENT]),
+});
+
+export const firebaseGoogleAuthSchema = z.object({
+  idToken: z.string().min(20, "Invalid Google authentication token"),
+  expectedRole: z.enum([ROLES.SUPER_ADMIN, ROLES.COORDINATOR, ROLES.STUDENT]),
+});
+
+export const firebaseStudentRegisterSchema = z.object({
+  idToken: z.string().min(20, "Invalid authentication token"),
+  name: z.string().trim().min(2, "Name must be at least 2 characters").max(100),
+  studentId: z.string().trim().min(2, "Student ID / Roll number is required").max(50),
+  department: z.string().trim().min(2, "Department / Branch is required").max(100),
+  phone: z.string().trim().max(20).optional(),
 });
 
 export const studentRegisterSchema = z.object({
@@ -37,7 +61,7 @@ export const eventSchema = z.object({
   bannerUrl: z.string().trim().optional().nullable(),
   mode: z.enum([EVENT_MODES.IN_PERSON, EVENT_MODES.VIRTUAL, EVENT_MODES.HYBRID]),
   venue: z.string().trim().min(2, "Venue is required").max(200),
-  locationUrl: z.string().trim().url().optional().nullable().or(z.literal("")),
+  locationUrl: httpUrlSchema.optional().nullable().or(z.literal("")),
   startDate: z.string().refine((val) => !isNaN(Date.parse(val)), "Invalid start date"),
   endDate: z.string().refine((val) => !isNaN(Date.parse(val)), "Invalid end date"),
   registrationDeadline: z
@@ -52,6 +76,17 @@ export const eventSchema = z.object({
   ]),
   isRegistrationOpen: z.boolean().default(true),
   category: z.string().trim().default("Workshop"),
+});
+
+export const eventStatusUpdateSchema = z.object({
+  id: z.string().trim().min(1, "Event ID is required"),
+  status: z.enum([
+    PUBLISH_STATUS.DRAFT,
+    PUBLISH_STATUS.PUBLISHED,
+    PUBLISH_STATUS.ARCHIVED,
+    PUBLISH_STATUS.CANCELLED,
+  ]),
+  isRegistrationOpen: z.boolean().optional(),
 });
 
 export const postSchema = z.object({
@@ -70,6 +105,11 @@ export const postSchema = z.object({
   status: z.enum([PUBLISH_STATUS.DRAFT, PUBLISH_STATUS.PUBLISHED, PUBLISH_STATUS.ARCHIVED]),
 });
 
+export const postStatusUpdateSchema = z.object({
+  id: z.string().trim().min(1, "Post ID is required"),
+  status: z.enum([PUBLISH_STATUS.DRAFT, PUBLISH_STATUS.PUBLISHED, PUBLISH_STATUS.ARCHIVED]),
+});
+
 export const teamMemberSchema = z.object({
   name: z.string().trim().min(2).max(100),
   role: z.string().trim().min(2).max(100),
@@ -77,8 +117,8 @@ export const teamMemberSchema = z.object({
   bio: z.string().trim().min(10).max(1000),
   photoUrl: z.string().trim().optional().nullable(),
   email: z.string().trim().email().optional().nullable().or(z.literal("")),
-  githubUrl: z.string().trim().url().optional().nullable().or(z.literal("")),
-  linkedinUrl: z.string().trim().url().optional().nullable().or(z.literal("")),
+  githubUrl: httpUrlSchema.optional().nullable().or(z.literal("")),
+  linkedinUrl: httpUrlSchema.optional().nullable().or(z.literal("")),
   displayOrder: z.coerce.number().int().default(0),
   isActive: z.boolean().default(true),
 });
@@ -87,7 +127,7 @@ export const resourceSchema = z.object({
   title: z.string().trim().min(3).max(200),
   description: z.string().trim().min(10).max(1000),
   category: z.string().trim().min(2).max(100),
-  url: z.string().trim().url("Must be a valid URL"),
+  url: httpUrlSchema,
   difficulty: z.enum(["Beginner", "Intermediate", "Advanced"]).default("Beginner"),
   isPublished: z.boolean().default(true),
 });
@@ -104,11 +144,17 @@ export const siteSettingsSchema = z.object({
   supportingLine: z.string().trim().min(2).max(150),
   mainTagline: z.string().trim().min(2).max(200),
   secondaryPhrase: z.string().trim().max(100),
-  contactEmail: z.string().trim().email(),
+  contactEmail: z
+    .string()
+    .trim()
+    .email("Invalid contact email address")
+    .or(z.literal(""))
+    .default(""),
+  headquarters: z.string().trim().max(200).optional().default(""),
   timezone: z.string().trim().min(2),
-  instagramHandle: z.string().trim().max(100),
-  youtubeChannel: z.string().trim().max(100),
-  discordInvite: z.string().trim().max(100),
+  instagramHandle: z.string().trim().max(100).default(""),
+  youtubeChannel: z.string().trim().max(100).default(""),
+  discordInvite: z.string().trim().max(100).default(""),
   bannerUrl: z.string().trim(),
   shieldLogoUrl: z.string().trim(),
   aboutSummary: z.string().trim().min(10),
@@ -117,9 +163,4 @@ export const siteSettingsSchema = z.object({
 
 export const passwordResetRequestSchema = z.object({
   email: z.string().trim().email("Invalid email address"),
-});
-
-export const passwordResetSubmitSchema = z.object({
-  token: z.string().trim().min(10, "Invalid reset token"),
-  newPassword: z.string().min(8, "Password must be at least 8 characters"),
 });

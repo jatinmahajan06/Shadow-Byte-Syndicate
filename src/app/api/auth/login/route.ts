@@ -1,18 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { verifyPassword, createSession, getRoleDashboardPath } from "@/lib/auth";
-import { loginSchema } from "@/lib/validators";
+import { getAdminAuth, getAdminDb, FieldValue } from "@/firebase/admin";
+import { createFirebaseSessionCookie, getRoleDashboardPath } from "@/lib/auth";
+import { firebaseLoginSchema } from "@/lib/validators";
 import { rateLimit } from "@/lib/rate-limit";
-import { logAudit } from "@/lib/audit";
-import { ROLES, UserRole } from "@/lib/constants";
+import { logAudit, recordUserActivity } from "@/lib/audit";
+import { UserRole } from "@/lib/constants";
 
 export async function POST(req: NextRequest) {
   try {
     const ip = req.headers.get("x-forwarded-for") || "127.0.0.1";
-    const userAgent = req.headers.get("user-agent") || undefined;
 
-    // Rate limit: 5 login attempts per IP per minute
-    const limiter = rateLimit(`login:${ip}`, 5, 60);
+    const limiter = rateLimit(`login:${ip}`, 10, 60);
     if (!limiter.success) {
       return NextResponse.json(
         {
@@ -23,55 +21,53 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const parsed = loginSchema.safeParse(body);
+    const parsed = firebaseLoginSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
-        { error: "Invalid form data: " + parsed.error.errors[0]?.message },
+        { error: "Invalid authentication payload: " + parsed.error.errors[0]?.message },
         { status: 400 }
       );
     }
 
-    const { email, password, expectedRole } = parsed.data;
+    const { idToken, expectedRole } = parsed.data;
+    const adminAuth = getAdminAuth();
+    const db = getAdminDb();
 
-    // Generic error response to prevent user enumeration
-    const genericAuthError = "Invalid email, password, or unauthorized for this portal.";
+    const decoded = await adminAuth.verifyIdToken(idToken, true);
+    const uid = decoded.uid;
 
-    const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
-    });
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
 
-    if (!user) {
-      return NextResponse.json({ error: genericAuthError }, { status: 401 });
+    if (!userSnap.exists) {
+      return NextResponse.json(
+        { error: "Account profile not found. Please sign up or contact administration." },
+        { status: 401 }
+      );
     }
 
-    // Check password
-    const passwordValid = await verifyPassword(password, user.passwordHash);
-    if (!passwordValid) {
-      return NextResponse.json({ error: genericAuthError }, { status: 401 });
-    }
+    const userData = userSnap.data()!;
 
-    // Strict account status check
-    if (!user.isActive) {
+    if (userData.isActive === false) {
       return NextResponse.json(
         { error: "This account has been deactivated. Please contact administration." },
         { status: 403 }
       );
     }
 
-    // STRICT ROLE PORTAL ENFORCEMENT:
-    // A user must never gain access by selecting the wrong login page.
-    // If a user with role STUDENT tries to login on /login/coordinator or /login/super-admin, reject!
-    if (user.role !== expectedRole) {
+    // Strict Portal Role Enforcement
+    if (userData.role !== expectedRole) {
       await logAudit({
         action: "PORTAL_ROLE_MISMATCH",
         entityType: "User",
-        entityId: user.id,
+        entityId: uid,
         details: {
-          userEmail: user.email,
-          actualRole: user.role,
+          userEmail: userData.email,
+          actualRole: userData.role,
           attemptedPortalRole: expectedRole,
         },
-        userId: user.id,
+        userId: uid,
+        userEmail: userData.email,
         ipAddress: ip,
       });
 
@@ -86,33 +82,55 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create session
-    await createSession(user.id, user.role, ip, userAgent);
+    // Ensure Firebase Custom Claims stay synchronized with Firestore role
+    await adminAuth.setCustomUserClaims(uid, {
+      role: userData.role,
+      isActive: true,
+    });
+
+    await userRef.update({
+      lastLoginAt: FieldValue.serverTimestamp(),
+    });
+
+    await createFirebaseSessionCookie(idToken);
+
+    await recordUserActivity(
+      uid,
+      "LOGIN_SUCCESS",
+      `Authenticated via ${expectedRole} portal.`
+    );
 
     await logAudit({
       action: "USER_LOGIN_SUCCESS",
       entityType: "User",
-      entityId: user.id,
-      details: { role: user.role, email: user.email },
-      userId: user.id,
+      entityId: uid,
+      details: { role: userData.role, email: userData.email },
+      userId: uid,
+      userEmail: userData.email,
       ipAddress: ip,
     });
+
+    const userRole = userData.role as UserRole;
 
     return NextResponse.json({
       success: true,
       user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
+        id: uid,
+        uid,
+        email: userData.email,
+        name: userData.name,
+        role: userRole,
+        isActive: true,
+        studentId: userData.studentId || null,
+        department: userData.department || null,
       },
-      redirectUrl: getRoleDashboardPath(user.role as UserRole),
+      redirectUrl: getRoleDashboardPath(userRole),
     });
-  } catch (error: unknown) {
-    console.error("[Login API Error]", error);
+  } catch (error) {
+    console.error("[Firebase Auth Login Error]", error);
     return NextResponse.json(
-      { error: "An unexpected server error occurred during authentication." },
-      { status: 500 }
+      { error: "Invalid credentials or session expired." },
+      { status: 401 }
     );
   }
 }

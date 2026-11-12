@@ -9,6 +9,7 @@
     --color-red-bright: #ff1e27;
   }
 
+  html,
   body {
     background-color: #050508;
     color: #cbd5e1;
@@ -106,3 +107,4 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
+

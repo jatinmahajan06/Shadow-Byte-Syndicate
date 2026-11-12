@@ -1,181 +1,204 @@
-import { describe, it, expect } from "vitest";
-import { prisma } from "../src/lib/prisma";
-import { hashPassword, verifyPassword } from "../src/lib/auth";
-import { ROLES, PUBLISH_STATUS, REGISTRATION_STATUS } from "../src/lib/constants";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { getAdminDb, FieldValue, Timestamp } from "../src/firebase/admin";
+import { ROLES, PUBLISH_STATUS, EVENT_MODES } from "../src/lib/constants";
+import { AuthUser } from "../src/lib/auth";
+import { registerStudentForEvent } from "../src/services/eventService";
+import { getSiteSettings, getContactMessages } from "../src/services/siteService";
+import { createCoordinatorAccount } from "../src/services/userService";
+import { provisionTestUser, cleanupTestUsers } from "./setup-firebase";
 
-describe("End-to-End API Security & Role Portal Invariants", () => {
-  it("1. Verifies portal role mismatch enforcement logic", async () => {
-    // Look up student account
-    const student = await prisma.user.findFirst({
-      where: { role: ROLES.STUDENT, isActive: true },
+describe("Concurrent Firestore Transactions, Settings Persistence & Admin Workflows", () => {
+  const uniqueSuffix = Date.now();
+  const pw = "SecurePass123!";
+  const createdUids: string[] = [];
+  const createdEventIds: string[] = [];
+  const createdRegIds: string[] = [];
+  const createdContactIds: string[] = [];
+
+  let adminUser: Awaited<ReturnType<typeof provisionTestUser>>;
+
+  beforeAll(async () => {
+    adminUser = await provisionTestUser({
+      email: `int-admin-${uniqueSuffix}@shadowbyte.local`,
+      password: pw,
+      name: "Integration Super Admin",
+      role: ROLES.SUPER_ADMIN,
     });
-
-    expect(student).not.toBeNull();
-    if (!student) return;
-
-    // Simulate login verification against expectedRole
-    const verifyPortalAccess = (userRole: string, expectedPortalRole: string) => {
-      if (userRole !== expectedPortalRole) {
-        return { allowed: false, status: 403, error: "Access Denied: Portal role mismatch" };
-      }
-      return { allowed: true, status: 200 };
-    };
-
-    // A student attempting coordinator portal -> REJECTED
-    const attemptCoord = verifyPortalAccess(student.role, ROLES.COORDINATOR);
-    expect(attemptCoord.allowed).toBe(false);
-    expect(attemptCoord.status).toBe(403);
-
-    // A student attempting super-admin portal -> REJECTED
-    const attemptAdmin = verifyPortalAccess(student.role, ROLES.SUPER_ADMIN);
-    expect(attemptAdmin.allowed).toBe(false);
-    expect(attemptAdmin.status).toBe(403);
-
-    // A student accessing student portal -> ALLOWED
-    const attemptStudent = verifyPortalAccess(student.role, ROLES.STUDENT);
-    expect(attemptStudent.allowed).toBe(true);
-    expect(attemptStudent.status).toBe(200);
+    createdUids.push(adminUser.uid);
   });
 
-  it("2. Verifies Coordinator cannot permanently delete records", async () => {
-    const coord = await prisma.user.findFirst({ where: { role: ROLES.COORDINATOR } });
-    expect(coord).not.toBeNull();
-
-    // Verification logic matching DELETE handler in /api/events and /api/posts
-    const canDeleteRecord = (userRole: string) => {
-      return userRole === ROLES.SUPER_ADMIN;
-    };
-
-    expect(canDeleteRecord(coord!.role)).toBe(false);
-    expect(canDeleteRecord(ROLES.STUDENT)).toBe(false);
-    expect(canDeleteRecord(ROLES.SUPER_ADMIN)).toBe(true);
-  });
-
-  it("3. Verifies Site Settings update persists and updates public fields", async () => {
-    const admin = await prisma.user.findFirst({ where: { role: ROLES.SUPER_ADMIN } });
-    expect(admin).not.toBeNull();
-
-    const newTagline = "WE DON’T FOLLOW THE SYSTEM, WE SECURE IT. [VERIFIED]";
-
-    // Update settings in database
-    const updated = await prisma.siteSettings.upsert({
-      where: { id: "default" },
-      create: {
-        id: "default",
-        mainTagline: newTagline,
-      },
-      update: {
-        mainTagline: newTagline,
-      },
-    });
-
-    expect(updated.mainTagline).toBe(newTagline);
-
-    // Read back through fresh query
-    const readBack = await prisma.siteSettings.findUnique({
-      where: { id: "default" },
-    });
-    expect(readBack?.mainTagline).toBe(newTagline);
-
-    // Restore original tagline
-    await prisma.siteSettings.update({
-      where: { id: "default" },
-      data: { mainTagline: "WE DON’T FOLLOW THE SYSTEM, WE SECURE IT." },
-    });
-  });
-
-  it("4. Verifies Concurrent registration requests cannot exceed event capacity", async () => {
-    // Create an event with capacity = 2
-    const event = await prisma.event.create({
-      data: {
-        slug: `concurrency-test-${Date.now()}`,
-        title: "Concurrent Registration Race Test",
-        summary: "Capacity limited to 2",
-        description: "Testing concurrent atomic transactions",
-        venue: "Cyber Range",
-        startDate: new Date(Date.now() + 86400000),
-        endDate: new Date(Date.now() + 90000000),
-        registrationDeadline: new Date(Date.now() + 80000000),
-        capacity: 2,
-        status: PUBLISH_STATUS.PUBLISHED,
-        createdById: (await prisma.user.findFirst({ where: { role: ROLES.SUPER_ADMIN } }))!.id,
-      },
-    });
-
-    // Create 3 mock student users
-    const studentsToRegister = await Promise.all([
-      prisma.user.create({
-        data: {
-          name: "Concurrent Stu 1",
-          email: `c1-${Date.now()}@shadowbyte.local`,
-          passwordHash: "hash",
-          role: ROLES.STUDENT,
-        },
-      }),
-      prisma.user.create({
-        data: {
-          name: "Concurrent Stu 2",
-          email: `c2-${Date.now()}@shadowbyte.local`,
-          passwordHash: "hash",
-          role: ROLES.STUDENT,
-        },
-      }),
-      prisma.user.create({
-        data: {
-          name: "Concurrent Stu 3",
-          email: `c3-${Date.now()}@shadowbyte.local`,
-          passwordHash: "hash",
-          role: ROLES.STUDENT,
-        },
-      }),
+  afterAll(async () => {
+    const db = getAdminDb();
+    await Promise.all([
+      ...createdRegIds.map((id) => db.collection("eventRegistrations").doc(id).delete().catch(() => {})),
+      ...createdEventIds.map((id) => db.collection("events").doc(id).delete().catch(() => {})),
+      ...createdContactIds.map((id) => db.collection("contactMessages").doc(id).delete().catch(() => {})),
     ]);
+    await cleanupTestUsers(createdUids);
+  });
 
-    // Atomic transaction registration function
-    const registerStudent = async (studentId: string) => {
-      return prisma.$transaction(async (tx) => {
-        const confirmedCount = await tx.eventRegistration.count({
-          where: {
-            eventId: event.id,
-            status: REGISTRATION_STATUS.CONFIRMED,
-          },
-        });
+  it("1. Concurrent student registrations never exceed strict Firestore event capacity", async () => {
+    const db = getAdminDb();
 
-        if (confirmedCount >= event.capacity) {
-          throw new Error("CAPACITY_REACHED");
-        }
+    const eventRef = await db.collection("events").add({
+      slug: `race-test-${uniqueSuffix}`,
+      title: "Concurrent Capacity Stress Workshop",
+      summary: "Verifying Firestore transactional isolation under concurrent requests.",
+      description: "Multiple simultaneous students racing for the last 2 seats.",
+      bannerUrl: null,
+      mode: EVENT_MODES.VIRTUAL,
+      venue: "Cyber Range",
+      locationUrl: null,
+      startDate: Timestamp.fromDate(new Date(Date.now() + 5 * 86400000)),
+      endDate: Timestamp.fromDate(new Date(Date.now() + 6 * 86400000)),
+      registrationDeadline: Timestamp.fromDate(new Date(Date.now() + 4 * 86400000)),
+      capacity: 2,
+      registeredCount: 0,
+      status: PUBLISH_STATUS.PUBLISHED,
+      isRegistrationOpen: true,
+      category: "CTF Competition",
+      createdById: adminUser.uid,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    createdEventIds.push(eventRef.id);
 
-        return tx.eventRegistration.create({
-          data: {
-            eventId: event.id,
-            studentId,
-            status: REGISTRATION_STATUS.CONFIRMED,
-          },
-        });
-      });
-    };
+    const racers = await Promise.all(
+      [1, 2, 3].map((idx) =>
+        provisionTestUser({
+          email: `racer-${idx}-${uniqueSuffix}@shadowbyte.local`,
+          password: pw,
+          name: `Concurrent Student ${idx}`,
+          role: ROLES.STUDENT,
+          studentId: `RACE-${idx}`,
+        })
+      )
+    );
+    racers.forEach((r) => createdUids.push(r.uid));
 
-    // Attempt 3 simultaneous registrations for 2 slots
     const results = await Promise.allSettled(
-      studentsToRegister.map((s) => registerStudent(s.id))
+      racers.map((r) => {
+        const authUser: AuthUser = {
+          id: r.uid,
+          uid: r.uid,
+          email: r.email,
+          name: r.name,
+          role: ROLES.STUDENT,
+          isActive: true,
+          studentId: "RACE",
+          department: "CSE",
+        };
+        return registerStudentForEvent(eventRef.id, authUser);
+      })
     );
 
-    const succeeded = results.filter((r) => r.status === "fulfilled");
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
     const rejected = results.filter((r) => r.status === "rejected");
 
-    // Exactly 2 must succeed, and 1 must be rejected due to capacity limit!
-    expect(succeeded.length).toBe(2);
+    expect(fulfilled.length).toBe(2);
     expect(rejected.length).toBe(1);
 
-    // Verify final database count is exactly 2
-    const finalCount = await prisma.eventRegistration.count({
-      where: { eventId: event.id, status: REGISTRATION_STATUS.CONFIRMED },
+    fulfilled.forEach((r) => {
+      if (r.status === "fulfilled") {
+        createdRegIds.push(r.value.registrationId);
+      }
     });
-    expect(finalCount).toBe(2);
 
-    // Clean up
-    await prisma.event.delete({ where: { id: event.id } });
-    await prisma.user.deleteMany({
-      where: { id: { in: studentsToRegister.map((s) => s.id) } },
+    const finalConfirmed = await db
+      .collection("eventRegistrations")
+      .where("eventId", "==", eventRef.id)
+      .where("status", "==", "CONFIRMED")
+      .get();
+
+    expect(finalConfirmed.size).toBe(2);
+    const updatedEventSnap = await eventRef.get();
+    expect(updatedEventSnap.data()?.registeredCount).toBe(2);
+  });
+
+  it("2. Super Admin Coordinator provisioning & Site Settings Firestore persistence", async () => {
+    const db = getAdminDb();
+    const actor: AuthUser = {
+      id: adminUser.uid,
+      uid: adminUser.uid,
+      email: adminUser.email,
+      name: adminUser.name,
+      role: ROLES.SUPER_ADMIN,
+      isActive: true,
+      studentId: null,
+      department: "Administration",
+    };
+
+    const coordEmail = `appointed-coord-${uniqueSuffix}@shadowbyte.local`;
+    const createdCoord = await createCoordinatorAccount(
+      {
+        name: "Appointed Lead Coordinator",
+        email: coordEmail,
+        password: pw,
+        department: "Network Security",
+      },
+      actor
+    );
+    createdUids.push(createdCoord.uid);
+    expect(createdCoord.role).toBe(ROLES.COORDINATOR);
+
+    const settingsRef = db.collection("siteSettings").doc("default");
+    const beforeSnap = await settingsRef.get();
+    const originalTagline =
+      beforeSnap.data()?.mainTagline || "WE DON’T FOLLOW THE SYSTEM, WE SECURE IT.";
+
+    const updatedTagline = "WE DON’T FOLLOW THE SYSTEM, WE SECURE IT. [VERIFIED]";
+    await settingsRef.set(
+      {
+        id: "default",
+        clubName: "SHADOW BYTE SYNDICATE",
+        supportingLine: "HACK • RESEARCH • INNOVATE • SECURE",
+        mainTagline: updatedTagline,
+        secondaryPhrase: "BEYOND FIREWALLS",
+        contactEmail: "",
+        headquarters: "",
+        timezone: "Asia/Kolkata",
+        instagramHandle: "",
+        youtubeChannel: "",
+        discordInvite: "",
+        bannerUrl: "/assets/brand/banner.jpeg",
+        shieldLogoUrl: "/assets/brand/shield-emblem.png",
+        aboutSummary:
+          "Shadow Byte Syndicate is a student-led collegiate cybersecurity club focused on ethical research and defense.",
+        ethicsStatement:
+          "All offensive and defensive techniques are taught strictly for ethical cybersecurity.",
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    const freshSettings = await getSiteSettings();
+    expect(freshSettings.mainTagline).toBe(updatedTagline);
+    expect(freshSettings.contactEmail).toBe("");
+    expect(freshSettings.headquarters).toBe("");
+
+    // Restore tagline
+    await settingsRef.update({
+      mainTagline: originalTagline,
+      updatedAt: FieldValue.serverTimestamp(),
     });
+  });
+
+  it("3. Contact submissions persist cleanly to Cloud Firestore and are retrievable by Super Admin", async () => {
+    const db = getAdminDb();
+    const subject = `Integration Contact Probe ${uniqueSuffix}`;
+
+    const ref = await db.collection("contactMessages").add({
+      name: "External Faculty",
+      email: "faculty@college.edu",
+      subject,
+      message: "Requesting details about sponsoring the next collegiate CTF event.",
+      isRead: false,
+      respondedAt: null,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    createdContactIds.push(ref.id);
+
+    const messages = await getContactMessages();
+    expect(messages.some((m) => m.id === ref.id && m.subject === subject)).toBe(true);
   });
 });

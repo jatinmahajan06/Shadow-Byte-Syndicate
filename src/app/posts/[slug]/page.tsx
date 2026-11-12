@@ -2,16 +2,26 @@ import React from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
-import { prisma } from "@/lib/prisma";
+import { getPostBySlug } from "@/services/postService";
+import { getCurrentUser } from "@/lib/auth";
+import { PUBLISH_STATUS, ROLES } from "@/lib/constants";
 import { sanitizeHtml } from "@/lib/sanitize";
-import { BookOpen, Calendar, User, ArrowLeft, Tag, ShieldCheck } from "lucide-react";
+import { BookOpen, Calendar, User, ArrowLeft, Tag, ShieldCheck, AlertTriangle } from "lucide-react";
+
+export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: { params: { slug: string } }) {
-  const post = await prisma.post.findUnique({
-    where: { slug: params.slug },
-  });
+  const [user, post] = await Promise.all([
+    getCurrentUser(),
+    getPostBySlug(params.slug),
+  ]);
 
-  if (!post) return { title: "Post Not Found" };
+  const canPreviewDraft =
+    user?.role === ROLES.COORDINATOR || user?.role === ROLES.SUPER_ADMIN;
+
+  if (!post || (post.status !== PUBLISH_STATUS.PUBLISHED && !canPreviewDraft)) {
+    return { title: "Post Not Found" };
+  }
 
   return {
     title: `${post.title} | Knowledge Hub`,
@@ -20,14 +30,15 @@ export async function generateMetadata({ params }: { params: { slug: string } })
 }
 
 export default async function PostDetailPage({ params }: { params: { slug: string } }) {
-  const post = await prisma.post.findUnique({
-    where: { slug: params.slug },
-    include: {
-      createdBy: { select: { name: true, role: true } },
-    },
-  });
+  const [user, post] = await Promise.all([
+    getCurrentUser(),
+    getPostBySlug(params.slug),
+  ]);
 
-  if (!post) {
+  const canPreviewDraft =
+    user?.role === ROLES.COORDINATOR || user?.role === ROLES.SUPER_ADMIN;
+
+  if (!post || (post.status !== PUBLISH_STATUS.PUBLISHED && !canPreviewDraft)) {
     notFound();
   }
 
@@ -45,6 +56,15 @@ export default async function PostDetailPage({ params }: { params: { slug: strin
           <span>&lt; BACK TO ALL PUBLICATIONS</span>
         </Link>
 
+        {post.status !== PUBLISH_STATUS.PUBLISHED && canPreviewDraft && (
+          <div className="p-4 bg-amber-950/50 border border-amber-700/80 rounded-lg text-xs font-mono text-amber-300 flex items-center space-x-3">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0 text-amber-400" />
+            <span>
+              STAFF PREVIEW ONLY — Status: <strong>{post.status}</strong>. This article is hidden from public visitors and students (returns 404).
+            </span>
+          </div>
+        )}
+
         {/* Header Hero */}
         <div className="cyber-panel p-6 sm:p-10 rounded-lg border border-brand-border space-y-6 relative">
           <div className="corner-bracket-tl"></div>
@@ -55,6 +75,18 @@ export default async function PostDetailPage({ params }: { params: { slug: strin
           <div className="inline-block px-3 py-1 bg-brand-surface border border-brand-border rounded text-xs font-mono text-brand-redBright font-bold">
             // {post.category.toUpperCase()}
           </div>
+
+          {post.coverImage && (
+            <div className="relative w-full h-56 sm:h-72 rounded border border-brand-border overflow-hidden bg-brand-void">
+              <Image
+                src={post.coverImage}
+                alt={`${post.title} cover`}
+                fill
+                unoptimized
+                className="object-cover"
+              />
+            </div>
+          )}
 
           <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white tracking-tight leading-tight">
             {post.title}
@@ -112,3 +144,4 @@ export default async function PostDetailPage({ params }: { params: { slug: strin
     </div>
   );
 }
+

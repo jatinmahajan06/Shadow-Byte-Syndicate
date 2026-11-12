@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAdminStorage } from "@/firebase/admin";
 import { getCurrentUser } from "@/lib/auth";
 import { ROLES } from "@/lib/constants";
-import path from "path";
-import fs from "fs/promises";
 import crypto from "crypto";
 
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
@@ -24,6 +23,7 @@ export async function POST(req: NextRequest) {
 
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
+    const folder = (formData.get("folder") as string | null) || "events";
 
     if (!file) {
       return NextResponse.json({ error: "No file uploaded." }, { status: 400 });
@@ -49,28 +49,66 @@ export async function POST(req: NextRequest) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // Extension validation
     let ext = ".jpg";
     if (file.type === "image/png") ext = ".png";
     if (file.type === "image/webp") ext = ".webp";
 
-    // Random cryptographically secure filename
-    const safeFilename = `${crypto.randomBytes(16).toString("hex")}${ext}`;
-    const uploadDir = path.join(process.cwd(), "public", "uploads");
+    const safeFolder = ["events", "posts", "team", "gallery", "branding"].includes(folder)
+      ? folder
+      : "events";
 
-    await fs.mkdir(uploadDir, { recursive: true });
-    await fs.writeFile(path.join(uploadDir, safeFilename), buffer);
+    if (
+      user.role === ROLES.COORDINATOR &&
+      safeFolder !== "events" &&
+      safeFolder !== "posts"
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Forbidden: Coordinators may only upload validated images for events and posts.",
+        },
+        { status: 403 }
+      );
+    }
 
-    const publicUrl = `/uploads/${safeFilename}`;
+    const safeFilename = `${Date.now()}-${crypto.randomBytes(12).toString("hex")}${ext}`;
+    const objectPath =
+      safeFolder === "events" || safeFolder === "posts"
+        ? `uploads/${safeFolder}/${user.uid}/${safeFilename}`
+        : `uploads/${safeFolder}/${safeFilename}`;
+
+    const bucket = getAdminStorage().bucket();
+    const fileRef = bucket.file(objectPath);
+    const downloadToken = crypto.randomUUID();
+
+    await fileRef.save(buffer, {
+      metadata: {
+        contentType: file.type,
+        metadata: {
+          firebaseStorageDownloadTokens: downloadToken,
+          uploadedBy: user.uid,
+        },
+      },
+    });
+
+    const useEmulators = process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS === "true";
+    const emulatorHost =
+      process.env.NEXT_PUBLIC_FIREBASE_STORAGE_EMULATOR_HOST || "127.0.0.1:9199";
+    const encodedPath = encodeURIComponent(objectPath);
+
+    const publicUrl = useEmulators
+      ? `http://${emulatorHost}/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`
+      : `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
 
     return NextResponse.json({
       success: true,
       url: publicUrl,
+      path: objectPath,
       filename: safeFilename,
       size: file.size,
     });
   } catch (error) {
-    console.error("[Upload API Error]", error);
-    return NextResponse.json({ error: "Failed to upload file." }, { status: 500 });
+    console.error("[Firebase Storage Upload API Error]", error);
+    return NextResponse.json({ error: "Failed to upload file to Firebase Storage." }, { status: 500 });
   }
 }

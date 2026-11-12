@@ -11,11 +11,13 @@ export async function GET() {
     authenticated: true,
     user: {
       id: user.id,
+      uid: user.uid,
       email: user.email,
       name: user.name,
       role: user.role,
       studentId: user.studentId,
       department: user.department,
+      photoURL: user.photoURL || null,
     },
   });
 }

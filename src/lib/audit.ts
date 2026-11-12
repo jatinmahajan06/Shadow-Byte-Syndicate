@@ -1,4 +1,4 @@
-import { prisma } from "./prisma";
+import { getAdminDb, FieldValue, isFirebaseAdminConfigured } from "@/firebase/admin";
 
 export async function logAudit({
   action,
@@ -6,6 +6,7 @@ export async function logAudit({
   entityId,
   details,
   userId,
+  userEmail,
   ipAddress,
 }: {
   action: string;
@@ -13,24 +14,51 @@ export async function logAudit({
   entityId?: string;
   details?: Record<string, unknown> | string;
   userId?: string;
+  userEmail?: string;
   ipAddress?: string;
 }) {
   try {
-    const detailsStr =
-      typeof details === "object" ? JSON.stringify(details) : details;
+    if (!isFirebaseAdminConfigured()) return;
 
-    await prisma.auditLog.create({
-      data: {
-        action,
-        entityType,
-        entityId,
-        details: detailsStr,
-        userId: userId || null,
-        ipAddress: ipAddress || null,
-      },
+    const db = getAdminDb();
+    const detailsStr =
+      typeof details === "object" ? JSON.stringify(details) : details || null;
+
+    await db.collection("auditLogs").add({
+      action,
+      entityType,
+      entityId: entityId || null,
+      details: detailsStr,
+      userId: userId || null,
+      userEmail: userEmail || null,
+      ipAddress: ipAddress || null,
+      createdAt: FieldValue.serverTimestamp(),
     });
   } catch (error) {
-    // Avoid failing main transaction on audit log error, but log to stderr
-    console.error("[AuditLog Error]", error);
+    console.error("[Firestore AuditLog Error]", error);
+  }
+}
+
+export async function recordUserActivity(
+  uid: string,
+  action: string,
+  description: string,
+  metadata?: Record<string, unknown>
+) {
+  try {
+    if (!isFirebaseAdminConfigured() || !uid) return;
+    const db = getAdminDb();
+    await db
+      .collection("users")
+      .doc(uid)
+      .collection("activityHistory")
+      .add({
+        action,
+        description,
+        metadata: metadata || {},
+        createdAt: FieldValue.serverTimestamp(),
+      });
+  } catch (error) {
+    console.error("[User ActivityHistory Error]", error);
   }
 }

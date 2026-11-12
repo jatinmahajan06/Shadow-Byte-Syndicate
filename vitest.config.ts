@@ -6,6 +6,8 @@ export default defineConfig({
     environment: "node",
     globals: true,
     testTimeout: 15000,
+    fileParallelism: false,
+    setupFiles: ["./tests/setup-firebase.ts"],
   },
   resolve: {
     alias: {
@@ -13,3 +15,4 @@ export default defineConfig({
     },
   },
 });
+

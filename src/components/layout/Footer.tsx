@@ -1,10 +1,29 @@
 import React from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Shield, Lock, Terminal, Globe, ExternalLink, Mail } from "lucide-react";
+import { Shield } from "lucide-react";
 import { BRAND } from "@/lib/constants";
+import { getSiteSettings } from "@/services/siteService";
 
-export default function Footer() {
+export default async function Footer() {
+  const settings = await getSiteSettings().catch(() => null);
+  const clubName = settings?.clubName || BRAND.name;
+  const supportingLine = settings?.supportingLine || BRAND.supportingLine;
+  const mainTagline = settings?.mainTagline || BRAND.mainTagline;
+  const secondaryPhrase = settings?.secondaryPhrase || BRAND.secondaryPhrase;
+  const shieldUrl = settings?.shieldLogoUrl || "/assets/brand/shield-emblem.png";
+  const instagram = settings?.instagramHandle?.trim() || "";
+  const youtube = settings?.youtubeChannel?.trim() || "";
+  const discord = settings?.discordInvite?.trim() || "";
+  const contactEmail = settings?.contactEmail?.trim() || "";
+
+  const channels = [
+    instagram ? { label: "Instagram", value: instagram } : null,
+    youtube ? { label: "YouTube", value: youtube } : null,
+    discord ? { label: "Discord", value: discord } : null,
+    contactEmail ? { label: "Contact Email", value: contactEmail } : null,
+  ].filter(Boolean) as { label: string; value: string }[];
+
   return (
     <footer className="bg-brand-black border-t border-brand-border/80 pt-16 pb-12 relative overflow-hidden">
       {/* Subtle background red glow */}
@@ -17,29 +36,30 @@ export default function Footer() {
             <div className="flex items-center space-x-3">
               <div className="relative w-10 h-10 rounded-full border border-brand-red/50 overflow-hidden bg-brand-card p-0.5">
                 <Image
-                  src="/assets/brand/shield-emblem.png"
+                  src={shieldUrl}
                   alt="Shadow Byte Syndicate SB Shield Logo"
                   width={40}
                   height={40}
+                  unoptimized
                   className="object-cover w-full h-full"
                 />
               </div>
               <div>
                 <span className="font-extrabold tracking-wider text-white text-base block">
-                  {BRAND.name}
+                  {clubName}
                 </span>
                 <span className="text-[10px] font-mono tracking-widest text-brand-red uppercase font-semibold">
-                  {BRAND.supportingLine}
+                  {supportingLine}
                 </span>
               </div>
             </div>
 
             <p className="text-xs text-brand-gray-muted leading-relaxed font-mono">
-              &ldquo;{BRAND.mainTagline}&rdquo;
+              &ldquo;{mainTagline}&rdquo;
             </p>
 
             <div className="inline-block px-2.5 py-1 bg-brand-redDark/30 border border-brand-red/40 rounded text-[11px] font-mono text-brand-redBright tracking-widest uppercase">
-              {BRAND.secondaryPhrase}
+              {secondaryPhrase}
             </div>
           </div>
 
@@ -49,6 +69,11 @@ export default function Footer() {
               Navigation
             </h4>
             <ul className="space-y-2 text-xs font-mono text-brand-gray-text">
+              <li>
+                <Link href="/" className="hover:text-brand-redBright transition-colors">
+                  &gt; Home
+                </Link>
+              </li>
               <li>
                 <Link href="/about" className="hover:text-brand-redBright transition-colors">
                   &gt; About & Faculty Advisor
@@ -121,28 +146,33 @@ export default function Footer() {
             </ul>
           </div>
 
-          {/* Connect & Socials (Unverified Handles from Banner Artwork) */}
+          {/* Configured Official Channels */}
           <div className="space-y-3">
             <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-white border-l-2 border-brand-red pl-2">
-              Syndicate Channels
+              Official Channels
             </h4>
-            <div className="space-y-2 text-xs font-mono">
-              <div className="p-2.5 bg-brand-card border border-brand-border rounded">
-                <span className="text-[10px] text-brand-gray-dim uppercase block">Instagram</span>
-                <span className="text-brand-gray-text">{BRAND.socials.instagram}</span>
+            {channels.length === 0 ? (
+              <div className="p-3 bg-brand-card border border-brand-border rounded space-y-2 text-xs font-mono">
+                <p className="text-brand-gray-muted">
+                  No social or external channels configured yet.
+                </p>
+                <Link
+                  href="/contact"
+                  className="inline-block text-brand-redBright hover:underline font-semibold"
+                >
+                  Use Contact Form &gt;
+                </Link>
               </div>
-              <div className="p-2.5 bg-brand-card border border-brand-border rounded">
-                <span className="text-[10px] text-brand-gray-dim uppercase block">YouTube</span>
-                <span className="text-brand-gray-text">{BRAND.socials.youtube}</span>
+            ) : (
+              <div className="space-y-2 text-xs font-mono">
+                {channels.map((ch) => (
+                  <div key={ch.label} className="p-2.5 bg-brand-card border border-brand-border rounded">
+                    <span className="text-[10px] text-brand-gray-dim uppercase block">{ch.label}</span>
+                    <span className="text-brand-gray-text break-all">{ch.value}</span>
+                  </div>
+                ))}
               </div>
-              <div className="p-2.5 bg-brand-card border border-brand-border rounded">
-                <span className="text-[10px] text-brand-gray-dim uppercase block">Discord</span>
-                <span className="text-brand-gray-text">{BRAND.socials.discord}</span>
-              </div>
-            </div>
-            <p className="text-[10px] font-mono text-brand-gray-dim italic">
-              Note: Social handles originate from brand artwork assets and are configurable in administrative settings.
-            </p>
+            )}
           </div>
         </div>
 
@@ -160,3 +190,4 @@ export default function Footer() {
     </footer>
   );
 }
+

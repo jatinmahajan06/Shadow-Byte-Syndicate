@@ -1,47 +1,30 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
-import { Shield, Menu, X, LogIn, User, ShieldAlert, BookOpen, Calendar, Users, Terminal, ChevronDown } from "lucide-react";
-import { ROLES, BRAND } from "@/lib/constants";
-
-interface UserSession {
-  id: string;
-  name: string;
-  email: string;
-  role: string;
-}
+import { Menu, X, User, ShieldAlert, Terminal, ChevronDown } from "lucide-react";
+import { ROLES } from "@/lib/constants";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [session, setSession] = useState<UserSession | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { profile: session, loading, logout } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
 
-  useEffect(() => {
-    fetch("/api/auth/me")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.authenticated && data.user) {
-          setSession(data.user);
-        } else {
-          setSession(null);
-        }
-      })
-      .catch(() => setSession(null))
-      .finally(() => setLoading(false));
-  }, [pathname]);
-
   const handleLogout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    setSession(null);
+    await logout();
     router.push("/");
     router.refresh();
   };
+
+  const isNavActive = (href: string) =>
+    href === "/"
+      ? pathname === "/"
+      : pathname === href || pathname.startsWith(`${href}/`);
 
   const navLinks = [
     { name: "Home", href: "/" },
@@ -65,6 +48,7 @@ export default function Navbar() {
                 alt="Shadow Byte Syndicate SB Shield Emblem"
                 width={44}
                 height={44}
+                unoptimized
                 className="object-cover w-full h-full"
                 priority
               />
@@ -80,13 +64,14 @@ export default function Navbar() {
           </Link>
 
           {/* Desktop Nav Links */}
-          <nav className="hidden lg:flex items-center space-x-1">
+          <nav aria-label="Primary Navigation" className="hidden lg:flex items-center space-x-1">
             {navLinks.map((link) => {
-              const active = pathname === link.href;
+              const active = isNavActive(link.href);
               return (
                 <Link
                   key={link.name}
                   href={link.href}
+                  aria-current={active ? "page" : undefined}
                   className={`px-3 py-1.5 rounded text-sm font-medium transition-all ${
                     active
                       ? "text-white bg-brand-redDark/40 border border-brand-red/50 shadow-red-glow-sm"
@@ -217,17 +202,25 @@ export default function Navbar() {
 
       {/* Mobile Drawer */}
       {isOpen && (
-        <div className="lg:hidden bg-brand-black border-b border-brand-border px-4 pt-2 pb-6 space-y-2">
-          {navLinks.map((link) => (
-            <Link
-              key={link.name}
-              href={link.href}
-              className="block px-3 py-2 rounded text-base font-medium text-brand-gray-text hover:text-white hover:bg-brand-surface"
-              onClick={() => setIsOpen(false)}
-            >
-              {link.name}
-            </Link>
-          ))}
+        <nav aria-label="Mobile Navigation" className="lg:hidden bg-brand-black border-b border-brand-border px-4 pt-2 pb-6 space-y-2">
+          {navLinks.map((link) => {
+            const active = isNavActive(link.href);
+            return (
+              <Link
+                key={link.name}
+                href={link.href}
+                aria-current={active ? "page" : undefined}
+                className={`block px-3 py-2 rounded text-base font-medium transition-all ${
+                  active
+                    ? "text-white bg-brand-redDark/40 border border-brand-red/50"
+                    : "text-brand-gray-text hover:text-white hover:bg-brand-surface"
+                }`}
+                onClick={() => setIsOpen(false)}
+              >
+                {link.name}
+              </Link>
+            );
+          })}
 
           <div className="pt-4 border-t border-brand-border/60 space-y-2">
             {session ? (
@@ -307,8 +300,9 @@ export default function Navbar() {
               </>
             )}
           </div>
-        </div>
+        </nav>
       )}
     </header>
   );
 }
+

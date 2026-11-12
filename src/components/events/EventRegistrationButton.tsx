@@ -5,9 +5,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, AlertCircle, Loader2, ShieldCheck, UserCheck } from "lucide-react";
 import { ROLES } from "@/lib/constants";
+import { useAuth } from "@/hooks/useAuth";
 
 interface Props {
   eventId: string;
+  eventSlug?: string;
   isLoggedIn: boolean;
   userRole?: string;
   isRegistered: boolean;
@@ -19,6 +21,7 @@ interface Props {
 
 export default function EventRegistrationButton({
   eventId,
+  eventSlug,
   isLoggedIn,
   userRole,
   isRegistered,
@@ -27,12 +30,16 @@ export default function EventRegistrationButton({
   deadlinePassed,
   isOpen,
 }: Props) {
+  const { profile, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [registered, setRegistered] = useState(isRegistered);
   const [notes, setNotes] = useState("");
   const [showNotesModal, setShowNotesModal] = useState(false);
   const router = useRouter();
+
+  const effectiveLoggedIn = authLoading ? isLoggedIn : Boolean(profile) || isLoggedIn;
+  const effectiveRole = profile?.role || userRole;
 
   const handleRegister = async () => {
     setLoading(true);
@@ -84,7 +91,7 @@ export default function EventRegistrationButton({
   }
 
   // State 2: Not logged in
-  if (!isLoggedIn) {
+  if (!effectiveLoggedIn) {
     return (
       <div className="p-5 cyber-panel rounded-lg border border-brand-border space-y-3">
         <h4 className="text-sm font-bold text-white font-mono flex items-center space-x-2">
@@ -96,7 +103,7 @@ export default function EventRegistrationButton({
         </p>
         <div className="flex flex-wrap items-center gap-3 pt-1">
           <Link
-            href={`/login/student?redirect=/events/${eventId}`}
+            href={`/login/student?redirect=/events/${encodeURIComponent(eventSlug || eventId)}`}
             className="px-4 py-2 bg-brand-red hover:bg-brand-redBright text-white text-xs font-mono font-bold rounded shadow-red-glow-sm transition-all"
           >
             LOG IN TO REGISTER
@@ -113,10 +120,10 @@ export default function EventRegistrationButton({
   }
 
   // State 3: Non-student role (Coordinators and Admins cannot register as participants)
-  if (userRole !== ROLES.STUDENT) {
+  if (effectiveRole !== ROLES.STUDENT) {
     return (
       <div className="p-4 bg-brand-card border border-brand-border rounded-lg text-xs font-mono text-brand-gray-dim">
-        Logged in as <span className="text-white font-bold">{userRole}</span>. Event participation is reserved for student accounts. Administrative accounts manage event operations via their respective dashboards.
+        Logged in as <span className="text-white font-bold">{effectiveRole}</span>. Event participation is reserved for student accounts. Administrative accounts manage event operations via their respective dashboards.
       </div>
     );
   }
@@ -169,7 +176,7 @@ export default function EventRegistrationButton({
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="e.g. Bringing Kali Linux VM; interested in binary exploitation..."
+              placeholder="Optional: share your academic background or session notes..."
               className="w-full h-20 p-2.5 bg-brand-black border border-brand-border rounded text-xs font-mono text-white focus:outline-none focus:border-brand-red"
             />
           </div>
@@ -202,3 +209,4 @@ export default function EventRegistrationButton({
     </div>
   );
 }
+

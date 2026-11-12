@@ -2,8 +2,9 @@ import React from "react";
 import { notFound } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
-import { prisma } from "@/lib/prisma";
+import { getEventBySlug, getStudentRegistrationForEvent } from "@/services/eventService";
 import { getCurrentUser } from "@/lib/auth";
+import { PUBLISH_STATUS, ROLES } from "@/lib/constants";
 import { sanitizeHtml } from "@/lib/sanitize";
 import EventRegistrationButton from "@/components/events/EventRegistrationButton";
 import {
@@ -18,12 +19,20 @@ import {
   AlertTriangle,
 } from "lucide-react";
 
-export async function generateMetadata({ params }: { params: { slug: string } }) {
-  const event = await prisma.event.findUnique({
-    where: { slug: params.slug },
-  });
+export const dynamic = "force-dynamic";
 
-  if (!event) return { title: "Event Not Found" };
+export async function generateMetadata({ params }: { params: { slug: string } }) {
+  const [user, event] = await Promise.all([
+    getCurrentUser(),
+    getEventBySlug(params.slug),
+  ]);
+
+  const canPreviewDraft =
+    user?.role === ROLES.COORDINATOR || user?.role === ROLES.SUPER_ADMIN;
+
+  if (!event || (event.status !== PUBLISH_STATUS.PUBLISHED && !canPreviewDraft)) {
+    return { title: "Event Not Found" };
+  }
 
   return {
     title: `${event.title} | Events`,
@@ -32,19 +41,15 @@ export async function generateMetadata({ params }: { params: { slug: string } })
 }
 
 export default async function EventDetailPage({ params }: { params: { slug: string } }) {
-  const user = await getCurrentUser();
+  const [user, event] = await Promise.all([
+    getCurrentUser(),
+    getEventBySlug(params.slug),
+  ]);
 
-  const event = await prisma.event.findUnique({
-    where: { slug: params.slug },
-    include: {
-      createdBy: { select: { name: true, role: true } },
-      _count: {
-        select: { registrations: { where: { status: "CONFIRMED" } } },
-      },
-    },
-  });
+  const canPreviewDraft =
+    user?.role === ROLES.COORDINATOR || user?.role === ROLES.SUPER_ADMIN;
 
-  if (!event) {
+  if (!event || (event.status !== PUBLISH_STATUS.PUBLISHED && !canPreviewDraft)) {
     notFound();
   }
 
@@ -53,14 +58,7 @@ export default async function EventDetailPage({ params }: { params: { slug: stri
   let userRegStatus: string | undefined = undefined;
 
   if (user) {
-    const reg = await prisma.eventRegistration.findUnique({
-      where: {
-        eventId_studentId: {
-          eventId: event.id,
-          studentId: user.id,
-        },
-      },
-    });
+    const reg = await getStudentRegistrationForEvent(event.id, user.uid);
 
     if (reg && reg.status === "CONFIRMED") {
       isRegistered = true;
@@ -72,8 +70,8 @@ export default async function EventDetailPage({ params }: { params: { slug: stri
   const seatsLeft = Math.max(0, event.capacity - confirmedCount);
   const isFull = seatsLeft === 0;
   const now = new Date();
-  const deadlinePassed = now > event.registrationDeadline;
-  const eventEnded = now > event.endDate;
+  const deadlinePassed = now > new Date(event.registrationDeadline);
+  const eventEnded = now > new Date(event.endDate);
 
   return (
     <div className="py-12 lg:py-16">
@@ -86,6 +84,15 @@ export default async function EventDetailPage({ params }: { params: { slug: stri
           <ArrowLeft className="w-4 h-4 text-brand-red" />
           <span>&lt; BACK TO ALL EVENTS</span>
         </Link>
+
+        {event.status !== PUBLISH_STATUS.PUBLISHED && canPreviewDraft && (
+          <div className="p-4 bg-amber-950/50 border border-amber-700/80 rounded-lg text-xs font-mono text-amber-300 flex items-center space-x-3">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0 text-amber-400" />
+            <span>
+              STAFF PREVIEW ONLY — Status: <strong>{event.status}</strong>. This event is hidden from public visitors and students (returns 404).
+            </span>
+          </div>
+        )}
 
         {/* Header Block */}
         <div className="cyber-panel p-6 sm:p-8 rounded-lg border border-brand-border space-y-6 relative">
@@ -102,6 +109,18 @@ export default async function EventDetailPage({ params }: { params: { slug: stri
               MODE: <strong className="text-white">{event.mode.replace("_", " ")}</strong>
             </span>
           </div>
+
+          {event.bannerUrl && (
+            <div className="relative w-full h-56 sm:h-72 rounded border border-brand-border overflow-hidden bg-brand-void">
+              <Image
+                src={event.bannerUrl}
+                alt={`${event.title} banner`}
+                fill
+                unoptimized
+                className="object-cover"
+              />
+            </div>
+          )}
 
           <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white tracking-tight leading-tight">
             {event.title}
@@ -188,6 +207,7 @@ export default async function EventDetailPage({ params }: { params: { slug: stri
           <div className="pt-6 border-t border-brand-border/60">
             <EventRegistrationButton
               eventId={event.id}
+              eventSlug={event.slug}
               isLoggedIn={Boolean(user)}
               userRole={user?.role}
               isRegistered={isRegistered}
@@ -214,7 +234,7 @@ export default async function EventDetailPage({ params }: { params: { slug: stri
           />
 
           <div className="pt-6 border-t border-brand-border/60 text-xs font-mono text-brand-gray-dim flex items-center justify-between">
-            <span>Posted by: {event.createdBy.name}</span>
+            <span>Posted by: {event.createdBy?.name || "Club Organizer"}</span>
             <span>Syndicate Timezone: Asia/Kolkata</span>
           </div>
         </div>
@@ -222,3 +242,4 @@ export default async function EventDetailPage({ params }: { params: { slug: stri
     </div>
   );
 }
+

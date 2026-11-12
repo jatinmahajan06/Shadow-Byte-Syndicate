@@ -1,9 +1,21 @@
 import React from "react";
 import { redirect } from "next/navigation";
-import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { ROLES } from "@/lib/constants";
+import {
+  getSiteSettings,
+  getTeamMembers,
+  getResources,
+  getGalleryItems,
+  getContactMessages,
+  getAuditLogs,
+} from "@/services/siteService";
+import { getAllEvents, getAllRegistrations } from "@/services/eventService";
+import { getAllPosts } from "@/services/postService";
+import { listUsersByRole } from "@/services/userService";
 import AdminDashboardClient from "@/components/dashboard/AdminDashboardClient";
+
+export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "Super Admin Command Console",
@@ -30,81 +42,24 @@ export default async function AdminDashboardPage() {
     posts,
     teamMembers,
     resources,
+    galleryItems,
     coordinators,
     students,
     registrations,
     messages,
     auditLogs,
   ] = await Promise.all([
-    prisma.siteSettings.findUnique({ where: { id: "default" } }),
-    prisma.event.findMany({
-      orderBy: { createdAt: "desc" },
-      include: {
-        createdBy: { select: { name: true, email: true } },
-        _count: { select: { registrations: true } },
-      },
-    }),
-    prisma.post.findMany({
-      orderBy: { createdAt: "desc" },
-      include: {
-        createdBy: { select: { name: true, email: true } },
-      },
-    }),
-    prisma.teamMember.findMany({
-      orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
-    }),
-    prisma.resource.findMany({
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.user.findMany({
-      where: { role: ROLES.COORDINATOR },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        isActive: true,
-        department: true,
-        phone: true,
-        createdAt: true,
-      },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.user.findMany({
-      where: { role: ROLES.STUDENT },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        isActive: true,
-        studentId: true,
-        department: true,
-        phone: true,
-        createdAt: true,
-        _count: { select: { registrations: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    }),
-    prisma.eventRegistration.findMany({
-      include: {
-        event: { select: { id: true, title: true, slug: true, startDate: true } },
-        student: { select: { id: true, name: true, email: true, studentId: true, department: true } },
-      },
-      orderBy: { registeredAt: "desc" },
-      take: 50,
-    }),
-    prisma.contactMessage.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 50,
-    }),
-    prisma.auditLog.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 50,
-      include: {
-        user: { select: { name: true, email: true, role: true } },
-      },
-    }),
+    getSiteSettings(),
+    getAllEvents(),
+    getAllPosts(),
+    getTeamMembers(),
+    getResources(),
+    getGalleryItems(),
+    listUsersByRole(ROLES.COORDINATOR),
+    listUsersByRole(ROLES.STUDENT),
+    getAllRegistrations(50),
+    getContactMessages(),
+    getAuditLogs(),
   ]);
 
   return (
@@ -140,6 +95,7 @@ export default async function AdminDashboardPage() {
           initialPosts={posts as any}
           initialTeam={teamMembers as any}
           initialResources={resources as any}
+          initialGallery={galleryItems as any}
           initialCoordinators={coordinators as any}
           initialStudents={students as any}
           initialRegistrations={registrations as any}
@@ -150,3 +106,4 @@ export default async function AdminDashboardPage() {
     </div>
   );
 }
+

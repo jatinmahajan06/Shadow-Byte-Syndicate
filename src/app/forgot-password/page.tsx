@@ -3,6 +3,8 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { Mail, ArrowLeft, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { requestPasswordReset } from "@/firebase/auth";
+import { USE_EMULATORS } from "@/firebase/config";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -19,20 +21,15 @@ export default function ForgotPasswordPage() {
     setDevNotice(null);
 
     try {
-      const res = await fetch("/api/auth/forgot-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
+      await requestPasswordReset(email);
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to process request.");
-      }
-
-      setMessage(data.message);
-      if (data.devNotice) {
-        setDevNotice(data.devNotice);
+      setMessage(
+        "If an active account exists with that email, password reset instructions have been dispatched via Firebase Authentication."
+      );
+      if (USE_EMULATORS) {
+        setDevNotice(
+          "Local Emulator Mode active: Check the Firebase Auth Emulator console logs for the generated password reset OOB link."
+        );
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Error processing password reset");
@@ -59,7 +56,7 @@ export default function ForgotPasswordPage() {
           </Link>
           <h2 className="text-xl font-bold text-white tracking-tight">Password Recovery</h2>
           <p className="text-xs text-brand-gray-muted mt-1">
-            Enter your registered email address to receive single-use password reset authorization.
+            Enter your registered email address to receive single-use Firebase password reset authorization.
           </p>
         </div>
 
@@ -94,7 +91,7 @@ export default function ForgotPasswordPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="identity@shadowbyte.club"
+                placeholder="Enter your registered email address"
                 className="w-full pl-9 pr-3 py-2 bg-brand-black border border-brand-border rounded text-xs font-mono text-white placeholder-brand-gray-dim focus:outline-none focus:border-brand-red"
               />
             </div>
